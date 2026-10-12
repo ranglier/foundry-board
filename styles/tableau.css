@@ -1,0 +1,91 @@
+/* Tableau de jeu */
+
+.tableau-de-jeu .tableau__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.tableau-de-jeu section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--color-border-light-tertiary, rgba(255, 255, 255, 0.12));
+}
+
+.tableau-de-jeu section:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.tableau-de-jeu h3 {
+  margin: 0;
+  font-size: var(--font-size-14, 14px);
+  border: none;
+}
+
+.tableau-de-jeu .tableau__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.tableau-de-jeu .tableau__row > button,
+.tableau-de-jeu .tableau__row > input,
+.tableau-de-jeu .tableau__row > select {
+  flex: 1 1 0;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.tableau-de-jeu .tableau__layers {
+  display: flex;
+  gap: 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tableau-de-jeu .tableau__hint {
+  margin: 0;
+  font-size: var(--font-size-12, 12px);
+  opacity: 0.75;
+}
+
+.tableau-de-jeu .tableau__groups {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tableau-de-jeu .tableau__groups li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.15rem 0;
+}
+
+.tableau-de-jeu .tableau__icons {
+  display: flex;
+  gap: 0.6rem;
+}
+
+.tableau-de-jeu .tableau__icons a {
+  cursor: pointer;
+}
+
+/* Boutons ajoutés au clic droit (HUD) des images, tuiles et dessins. */
+.tableau-hud-box {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+.tableau-hud.active {
+  color: var(--color-warm-1, #ff6400);
+}

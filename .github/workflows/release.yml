@@ -1,0 +1,39 @@
+# Publie une version du module quand une étiquette vX.Y.Z est poussée : module.json (version et adresses
+# mises à jour) et tableau-de-jeu.zip attachés à la release GitHub.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Préparer module.json
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          REPO="https://github.com/${GITHUB_REPOSITORY}"
+          jq --arg v "$VERSION" --arg r "$REPO" '
+            .version = $v
+            | .url = $r
+            | .bugs = ($r + "/issues")
+            | .manifest = ($r + "/releases/latest/download/module.json")
+            | .download = ($r + "/releases/download/v" + $v + "/tableau-de-jeu.zip")
+          ' module.json > module.tmp && mv module.tmp module.json
+          cat module.json
+
+      - name: Archive
+        run: zip -r tableau-de-jeu.zip module.json scripts styles README.md
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            module.json
+            tableau-de-jeu.zip
+          generate_release_notes: true
