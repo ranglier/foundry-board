@@ -14,10 +14,11 @@ Installation : Modules complémentaires > Installer un module > manifeste :
   - un objet (glisser l'objet : son image est posée) ;
   - un fichier de l'ordinateur (envoyé dans `worlds/<monde>/tableau/`).
   L'image arrive **sur le calque MJ, cachée**, à l'endroit du dépôt.
-- **Trois calques** :
-  - **Fond** : tuile sous tout le reste, verrouillée en y entrant, déplaçable par le MJ seul ;
-  - **Joueurs** : visible, déplaçable par les joueurs ;
+- **Trois calques**, tous faits de tuiles (images libres : poignées de redimensionnement, Maj + molette pour tourner, pas de règle de mouvement) :
+  - **Fond** : sous les autres images, verrouillée en y entrant ;
+  - **Joueurs** : visible, déplaçable par les joueurs (un simple glisser, même jeu en pause) ;
   - **MJ** : invisible des joueurs, ou visible sans pouvoir être déplacée (œil).
+- Les images se prennent avec l'**outil Tuiles** (barre de gauche), activé automatiquement après un dépôt.
 - **Clic droit sur une image** : changer de calque, montrer en grand aux joueurs, verrouiller, grouper.
 - **Verrou** sur les images, tuiles et dessins : plus rien ne bouge par accident, même pour le MJ.
 - **Groupes** d'images, de dessins et de formes : ils bougent ensemble, se verrouillent, se montrent et se cachent ensemble. Pour mêler des calques : grouper sur un calque, puis sélectionner sur l'autre et « + » sur le groupe dans le panneau.
@@ -36,15 +37,14 @@ Installation : Modules complémentaires > Installer un module > manifeste :
 
 ## Fonctionnement
 
-Les images des calques Joueurs et MJ sont des jetons sans vision, nom ni barres, rattachés à deux acteurs créés par le module dans le dossier d'acteurs « Tableau de jeu » : « Tableau - Joueurs » (propriété de tous les joueurs, qui peuvent donc déplacer ses jetons) et « Tableau - MJ » (MJ seul). Foundry ne laisse en effet que le MJ déplacer une tuile. Ne supprimez pas ces deux acteurs (ils sont recréés au besoin, mais les images posées avec les anciens perdent leur rattachement).
+Foundry ne laisse que le MJ modifier une tuile. Pour le calque Joueurs, le module gère le glisser chez le joueur (aperçu immédiat) et demande le déplacement au MJ connecté par le canal du module ; le MJ vérifie que l'image est bien sur le calque Joueurs, visible et non verrouillée, puis l'applique (le groupe suit). Un MJ doit donc être en ligne.
 
-Le déplacement d'un groupe par un joueur est appliqué aux autres membres par le MJ connecté : un MJ doit être en ligne.
+La version 1.0 posait des jetons rattachés à deux acteurs « Tableau - Joueurs » et « Tableau - MJ » : au premier lancement de la 1.1, le MJ les convertit en tuiles dans toutes les scènes. Ces deux acteurs (dossier d'acteurs « Tableau de jeu ») peuvent ensuite être supprimés.
 
 ## Limites connues
 
-- Sur une scène avec vision des jetons, un joueur qui sélectionne une image du calque Joueurs voit la scène comme s'il n'avait pas de jeton (les images n'ont pas de vision). Les scènes tableau n'ont pas de vision : utilisez-les pour montrer des images.
 - Un acteur glissé sans Maj crée un jeton de personnage, comme d'habitude (Alt : jeton caché) ; une page de texte glissée crée une note ; un objet lâché sur un jeton est laissé au système.
-- Les joueurs déplacent et tournent les images du calque Joueurs, sans pouvoir en changer l'image, le verrou ni en créer.
+- Les joueurs déplacent les images du calque Joueurs ; ils ne les redimensionnent ni ne les tournent. Leur personnage, s'il est sous le pointeur, reste prioritaire.
 - Maj+F pendant le glisser d'un jeton reste le « point de passage non aimanté » de Foundry : le raccourci Fond ne joue qu'en dehors d'un glisser.
 - Pour développer : le dossier du module doit s'appeler `tableau-de-jeu` (identifiant du module), pas `foundry-board`.
 - Seul le MJ pose des images.

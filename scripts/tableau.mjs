@@ -4,18 +4,18 @@
  * Foundry utilisé comme un tableau blanc, à la Roll20 :
  *  - glisser-déposer d'images sur la scène : pages image et images des journaux, portraits des fiches
  *    (glisser le portrait, ou Maj + glisser l'acteur), images des objets, fichiers de l'ordinateur ;
- *  - trois calques : Fond (tuile, sous tout le reste), Joueurs (jeton d'image que les joueurs peuvent
- *    déplacer), MJ (jeton d'image du MJ, caché ou visible des joueurs mais pas déplaçable par eux) ;
- *  - verrou par image (et par dessin), « Montrer en grand », groupes d'images, de dessins et de formes ;
+ *  - trois calques, tous en tuiles (images libres : redimensionnement, rotation, sans règle de mouvement) :
+ *    Fond (sous tout le reste), Joueurs (déplaçable par les joueurs), MJ (caché, ou visible sans être
+ *    déplaçable) ;
+ *  - verrou, « Montrer en grand », groupes d'images, de dessins et de formes ;
  *  - scène « tableau » vierge, nettoyage d'un calque, préparation et bascule de scène.
  *
- * Calques Joueurs et MJ : des jetons, car Foundry ne laisse que le MJ déplacer une tuile alors qu'un joueur
- * déplace les jetons dont il est propriétaire. Ces jetons appartiennent à deux acteurs créés par le module,
- * « Tableau - Joueurs » (propriété de tous) et « Tableau - MJ » (MJ seul), sans vision, nom ni barres.
+ * Calque Joueurs : Foundry ne laisse que le MJ modifier une tuile. Le client du joueur gère donc lui-même le
+ * glisser (aperçu local) et demande le déplacement au MJ connecté par le canal du module (game.socket).
  *
- * Données : `flags.tableau-de-jeu` = { layer: "fond" | "joueurs" | "mj", group?: identifiant } sur les
- * tuiles, jetons et dessins ; { board: "joueurs" | "mj" } sur les deux acteurs ; { board: true } sur les
- * scènes tableau ; noms des groupes dans `flags.tableau-de-jeu.groups` de la scène.
+ * Données : `flags.tableau-de-jeu` = { layer: "fond" | "joueurs" | "mj", group?: identifiant, name? } sur les
+ * tuiles et dessins ; { board: true } sur les scènes tableau ; noms des groupes dans
+ * `flags.tableau-de-jeu.groups` de la scène. La version 1.0 posait des jetons : convertis en tuiles par le MJ.
  */
 
 const MODULE = "tableau-de-jeu";
@@ -26,7 +26,8 @@ const LAYERS = {
   mj: { label: "MJ", icon: "fa-solid fa-user-secret", hint: "MJ seul, ou visible sans être déplaçable" }
 };
 const LAYER_ORDER = ["fond", "joueurs", "mj"];
-const GROUPABLE = ["Token", "Tile", "Drawing"];
+const GROUPABLE = ["Tile", "Drawing"];
+const SOCKET = "module.tableau-de-jeu";
 const IMAGE_EXT = /\.(png|jpe?g|webp|gif|avif|svg|bmp)(\?.*)?$/i;
 
 /* ---------------------------------------------------------------------------------------------- */
@@ -53,25 +54,20 @@ function notify(message, type = "info") {
   ui.notifications?.[type]?.(message);
 }
 
-/** Calque d'un document de la scène (tuile : Fond par défaut ; jeton : seulement ceux du module). */
+/** Calque d'une tuile (Fond par défaut pour une tuile posée sans le module). */
 function layerOf(doc) {
+  if (doc?.documentName !== "Tile") return null;
   const layer = flagOf(doc).layer;
-  if (LAYERS[layer]) return layer;
-  if (doc.documentName === "Tile") return "fond";
-  if (doc.documentName === "Token") {
-    const board = flagOf(doc.actor).board;
-    return LAYERS[board] ? board : null;
-  }
-  return null;
+  return LAYERS[layer] ? layer : "fond";
 }
 
-/** Image et géométrie (pixels) d'une tuile ou d'un jeton d'image. */
+/** Image et géométrie (pixels) d'une tuile, ou d'un jeton d'image de la version 1.0. */
 function geometry(doc) {
   const grid = doc.parent?.grid?.size ?? canvas.dimensions?.size ?? 100;
   const isToken = doc.documentName === "Token";
   return {
     src: doc.texture?.src ?? "",
-    name: doc.name || flagOf(doc).name || "",
+    name: flagOf(doc).name || doc.name || "",
     x: doc.x, y: doc.y,
     w: isToken ? doc.width * grid : doc.width,
     h: isToken ? doc.height * grid : doc.height,
@@ -143,71 +139,26 @@ const baseName = (src) => decodeURIComponent(String(src).split("/").pop()?.split
   .replace(/\.[a-z0-9]+$/i, "").replace(/[-_]+/g, " ").trim();
 
 /* ---------------------------------------------------------------------------------------------- */
-/* Acteurs porteurs des jetons d'image                                                             */
-/* ---------------------------------------------------------------------------------------------- */
-
-const boardActors = {};
-
-function actorType() {
-  const types = (game.documentTypes?.Actor ?? Object.keys(CONFIG.Actor.typeLabels ?? {})).filter((t) => t !== "base");
-  return types.includes("npc") ? "npc" : types[0] ?? "base";
-}
-
-async function boardActor(kind) {
-  const cached = boardActors[kind];
-  if (cached && game.actors.has(cached.id)) return cached;
-  let actor = game.actors.find((a) => flagOf(a).board === kind);
-  if (!actor) {
-    if (!game.user.isGM) throw new Error("Seul le MJ peut préparer le tableau.");
-    let folder = game.folders.find((f) => f.type === "Actor" && flagOf(f).board === "folder");
-    folder ??= await Folder.implementation.create({ name: "Tableau de jeu", type: "Actor", sorting: "a",
-      flags: { [MODULE]: { board: "folder" } } });
-    const levels = CONST.DOCUMENT_OWNERSHIP_LEVELS;
-    actor = await Actor.implementation.create({
-      name: kind === "joueurs" ? "Tableau - Joueurs" : "Tableau - MJ",
-      type: actorType(),
-      img: kind === "joueurs" ? "icons/svg/card-hand.svg" : "icons/svg/eye.svg",
-      folder: folder.id,
-      ownership: { default: kind === "joueurs" ? levels.OWNER : levels.NONE },
-      prototypeToken: { actorLink: false, sight: { enabled: false } },
-      flags: { [MODULE]: { board: kind } }
-    });
-  }
-  boardActors[kind] = actor;
-  return actor;
-}
-
-/* ---------------------------------------------------------------------------------------------- */
 /* Création et changement de calque                                                                */
 /* ---------------------------------------------------------------------------------------------- */
 
-/** Données d'une tuile ou d'un jeton pour un calque, à partir d'une géométrie. */
-async function layerData(layer, g) {
-  const flags = { [MODULE]: { layer, ...(g.group ? { group: g.group } : {}), ...(g.name ? { name: g.name } : {}) } };
+/** Ordre d'affichage d'une tuile selon son calque : Fond sous les autres tuiles, MJ au-dessus. */
+function sortFor(scene, layer) {
+  const sorts = scene.tiles.map((t) => t.sort ?? 0);
+  if (!sorts.length) return 0;
+  return layer === "fond" ? Math.min(...sorts) - 1 : Math.max(...sorts) + 1;
+}
+
+/** Données d'une tuile pour un calque, à partir d'une géométrie. */
+function tileData(scene, layer, g) {
   const level = g.level ?? currentLevel();
-  if (layer === "fond") {
-    return { type: "Tile", data: {
-      texture: { src: g.src }, x: g.x, y: g.y, width: g.w, height: g.h, rotation: g.rotation,
-      locked: g.locked, hidden: false, flags,
-      ...(level && TileDocument.schema?.fields?.levels ? { levels: [level] } : {})
-    } };
-  }
-  const actor = await boardActor(layer);
-  const grid = canvas.scene?.grid?.size ?? canvas.dimensions.size;
-  const displayModes = CONST.TOKEN_DISPLAY_MODES;
-  const token = await actor.getTokenDocument({
-    name: g.name || baseName(g.src) || "Image",
-    texture: { src: g.src, fit: "contain" },
-    x: g.x, y: g.y, width: g.w / grid, height: g.h / grid, rotation: g.rotation,
-    locked: g.locked, hidden: layer === "mj" ? g.hidden : false,
-    actorLink: false, displayName: displayModes.NONE, displayBars: displayModes.NONE,
-    disposition: CONST.TOKEN_DISPOSITIONS.SECRET ?? CONST.TOKEN_DISPOSITIONS.NEUTRAL,
-    sight: { enabled: false }, ring: { enabled: false }, lockRotation: false,
-    ...(level && TokenDocument.schema?.fields?.level ? { level } : {}),
-    // Systèmes qui recalent la taille d'un jeton sur celle de la créature (pf2e) : désactivé.
-    flags: { ...flags, ...(game.system.id === "pf2e" ? { pf2e: { linkToActorSize: false, autoscale: false } } : {}) }
-  });
-  return { type: "Token", data: token.toObject() };
+  return {
+    texture: { src: g.src }, x: Math.round(g.x), y: Math.round(g.y), width: Math.round(g.w), height: Math.round(g.h),
+    rotation: g.rotation ?? 0, locked: !!g.locked, hidden: layer === "mj" ? !!g.hidden : false,
+    sort: sortFor(scene, layer),
+    ...(level && TileDocument.schema?.fields?.levels ? { levels: [level] } : {}),
+    flags: { [MODULE]: { layer, ...(g.group ? { group: g.group } : {}), ...(g.name ? { name: g.name } : {}) } }
+  };
 }
 
 /** Pose une image sur la scène en cours, centrée sur (x, y) : calque MJ, cachée. */
@@ -216,36 +167,52 @@ async function placeImage({ src, name, x, y, layer = "mj" }) {
   if (!scene || !src) return;
   if (!game.user.isGM) return notify("Seul le MJ peut poser des images sur la scène.", "warn");
   const { w, h } = fitSize(await naturalSize(src));
-  const g = { src, name: name || baseName(src), x: Math.round(x - w / 2), y: Math.round(y - h / 2), w, h,
+  const g = { src, name: name || baseName(src), x: x - w / 2, y: y - h / 2, w, h,
     rotation: 0, locked: false, hidden: true, group: null, level: currentLevel() };
-  const { type, data } = await layerData(layer, g);
-  const [doc] = await scene.createEmbeddedDocuments(type, [data]);
+  const [doc] = await scene.createEmbeddedDocuments("Tile", [tileData(scene, layer, g)]);
+  // Les images sont des tuiles : outil Tuiles activé pour pouvoir les prendre, redimensionner, tourner.
+  if (canvas.activeLayer !== canvas.tiles) canvas.tiles?.activate?.();
   notify(`« ${g.name} » posée sur le calque ${LAYERS[layer].label}${layer === "mj" ? " (cachée)" : ""}.`);
   return doc;
 }
 
-/** Fait passer des tuiles et jetons d'image sur un autre calque (position, taille, rotation, groupe gardés). */
+/** Fait passer des tuiles sur un autre calque (position, taille, rotation, groupe gardés). */
 async function moveToLayer(docs, layer) {
   if (!game.user.isGM) return;
-  const items = docs.filter((d) => layerOf(d) && layerOf(d) !== layer && d.texture?.src);
+  const items = docs.filter((d) => d.documentName === "Tile" && layerOf(d) !== layer);
   if (!items.length) return;
   const byScene = new Map();
   for (const doc of items) {
-    const scene = doc.parent;
-    if (!byScene.has(scene)) byScene.set(scene, { Tile: [], Token: [], remove: { Tile: [], Token: [] } });
-    const g = geometry(doc);
-    if (layer === "fond") g.locked = true;     // un fond ne doit pas bouger par accident
-    if (layer === "mj") g.hidden = true;       // entrer sur le calque MJ : caché par défaut
-    const { type, data } = await layerData(layer, g);
-    const batch = byScene.get(scene);
-    batch[type].push(data);
-    batch.remove[doc.documentName].push(doc.id);
+    if (!byScene.has(doc.parent)) byScene.set(doc.parent, []);
+    const update = { _id: doc.id, [`flags.${MODULE}.layer`]: layer, sort: sortFor(doc.parent, layer) };
+    if (layerOf(doc) === "fond") update.locked = false;  // sortie du Fond : de nouveau déplaçable
+    if (layer === "fond") Object.assign(update, { locked: true, hidden: false });  // un fond ne bouge pas par accident
+    if (layer === "joueurs") update.hidden = false;
+    if (layer === "mj") update.hidden = true;     // entrer sur le calque MJ : caché par défaut
+    byScene.get(doc.parent).push(update);
   }
-  for (const [scene, batch] of byScene) {
-    for (const type of ["Tile", "Token"]) if (batch[type].length) await scene.createEmbeddedDocuments(type, batch[type]);
-    for (const type of ["Tile", "Token"]) if (batch.remove[type].length) await scene.deleteEmbeddedDocuments(type, batch.remove[type]);
-  }
+  for (const [scene, updates] of byScene) await scene.updateEmbeddedDocuments("Tile", updates, { [MODULE]: { sync: true } });
   notify(`${items.length} image(s) sur le calque ${LAYERS[layer].label}.`);
+}
+
+/** Version 1.0 : les images étaient des jetons d'acteurs du module ; converties en tuiles (MJ actif). */
+async function convertLegacyTokens() {
+  if (!isActiveGM()) return;
+  const boardActors = new Set(game.actors.filter((a) => flagOf(a).board === "joueurs" || flagOf(a).board === "mj").map((a) => a.id));
+  if (!boardActors.size) return;
+  let count = 0;
+  for (const scene of game.scenes) {
+    const tokens = scene.tokens.filter((t) => boardActors.has(t.actorId));
+    if (!tokens.length) continue;
+    const data = tokens.map((t) => {
+      const layer = flagOf(t).layer ?? flagOf(game.actors.get(t.actorId)).board;
+      return tileData(scene, LAYERS[layer] ? layer : "mj", geometry(t));
+    });
+    await scene.createEmbeddedDocuments("Tile", data);
+    await scene.deleteEmbeddedDocuments("Token", tokens.map((t) => t.id));
+    count += tokens.length;
+  }
+  if (count) notify(`Tableau de jeu : ${count} image(s) de la version précédente converties en tuiles. Les acteurs « Tableau - Joueurs » et « Tableau - MJ » peuvent être supprimés.`);
 }
 
 /* ---------------------------------------------------------------------------------------------- */
@@ -296,11 +263,11 @@ async function toggleLock(docs) {
 }
 
 async function toggleHidden(docs) {
-  const all = withGroups(docs).filter((d) => d.documentName !== "Token" || layerOf(d) === "mj");
-  if (!all.length) return notify("Seules les images du calque MJ (et les dessins, tuiles) se cachent ou s'affichent.", "warn");
+  const all = withGroups(docs).filter((d) => d.documentName !== "Tile" || layerOf(d) !== "fond");
+  if (!all.length) return notify("Le calque Fond est toujours visible : passez l'image sur le calque MJ pour la cacher.", "warn");
   const hide = !all.every((d) => d.hidden);
   await updateMany(all, { hidden: hide });
-  notify(hide ? "Caché aux joueurs." : "Visible des joueurs (sans pouvoir le déplacer).");
+  notify(hide ? "Caché aux joueurs." : "Visible des joueurs.");
 }
 
 async function groupSelection(docs, groupId = null) {
@@ -342,9 +309,12 @@ function onPreUpdate(doc, change, options) {
   const dx = (change.x ?? doc.x) - doc.x;
   const dy = (change.y ?? doc.y) - doc.y;
   if (!dx && !dy) return;
-  options[MODULE] ??= { op: foundry.utils.randomID(), moved: [], deltas: {} };
-  options[MODULE].moved.push(doc.id);
-  options[MODULE].deltas[group] ??= { dx, dy };
+  const info = (options[MODULE] ??= {});
+  info.op ??= foundry.utils.randomID();
+  info.moved ??= [];
+  info.deltas ??= {};
+  info.moved.push(doc.id);
+  info.deltas[group] ??= { dx, dy };
 }
 
 function onUpdate(doc, change, options) {
@@ -362,53 +332,102 @@ function onUpdate(doc, change, options) {
   if (others.length) updateMany(others, (m) => ({ x: m.x + delta.dx, y: m.y + delta.dy })).catch((err) => console.error(`${MODULE} |`, err));
 }
 
-/* Jetons : avec l'API de mouvement, un déplacement à la souris peut ne pas passer x / y dans preUpdate.
-   Le hook moveToken (tous les clients) donne l'origine et la destination : le MJ actif l'utilise quand
-   preUpdate n'a rien noté. Les jetons d'une même opération partagent l'objet `operation`. */
-const pendingMoves = new WeakMap();
+/* ---------------------------------------------------------------------------------------------- */
+/* Calque Joueurs : glisser par les joueurs, appliqué par le MJ                                    */
+/* ---------------------------------------------------------------------------------------------- */
 
-function onMoveToken(doc, movement, operation) {
-  if (!isActiveGM() || !operation || operation[MODULE]) return;
-  const group = flagOf(doc).group;
-  if (!group || !movement?.origin || !movement?.destination) return;
-  const dx = movement.destination.x - movement.origin.x;
-  const dy = movement.destination.y - movement.origin.y;
-  if (!dx && !dy) return;
-  let batch = pendingMoves.get(operation);
-  if (!batch) {
-    batch = { moved: new Set(), deltas: {}, scene: doc.parent };
-    pendingMoves.set(operation, batch);
-    setTimeout(() => {
-      for (const [g, d] of Object.entries(batch.deltas)) {
-        const others = groupMembers(batch.scene, g).filter((m) => !batch.moved.has(m.id));
-        if (others.length) updateMany(others, (m) => ({ x: m.x + d.dx, y: m.y + d.dy })).catch((err) => console.error(`${MODULE} |`, err));
-      }
-    }, 0);
-  }
-  batch.moved.add(doc.id);
-  batch.deltas[group] ??= { dx, dy };
+/** Le point (coordonnées de la scène) est-il dans la tuile, rotation comprise ? */
+function tileContains(doc, p) {
+  const cx = doc.x + doc.width / 2;
+  const cy = doc.y + doc.height / 2;
+  const a = -((doc.rotation ?? 0) * Math.PI) / 180;
+  const dx = p.x - cx, dy = p.y - cy;
+  const lx = dx * Math.cos(a) - dy * Math.sin(a);
+  const ly = dx * Math.sin(a) + dy * Math.cos(a);
+  return Math.abs(lx) <= doc.width / 2 && Math.abs(ly) <= doc.height / 2;
 }
 
-/* Jetons du tableau : un joueur peut les déplacer et les tourner, rien d'autre (ni image, ni verrou). */
-// Champs de mouvement de Foundry (TokenDocument.MOVEMENT_FIELDS) et données internes du mouvement.
-const PLAYER_TOKEN_FIELDS = new Set(["x", "y", "rotation", "elevation", "level", "width", "height", "depth", "shape",
-  "_id", "sort", "_movementHistory", "_regions", "movementAction"]);
-
-function guardPlayerTokenUpdate(doc, change, options) {
-  if (game.user.isGM || !layerOf(doc)) return;
-  const keys = Object.keys(foundry.utils.flattenObject(change)).map((k) => k.split(".")[0]);
-  if (keys.some((k) => !PLAYER_TOKEN_FIELDS.has(k))) {
-    notify("Les images du tableau se déplacent seulement : le reste est réservé au MJ.", "warn");
-    return false;
-  }
+/** Tuile du calque Joueurs la plus haute sous le point, déplaçable par les joueurs. */
+function playerTileAt(p) {
+  const tiles = canvas.tiles?.placeables ?? [];
+  return tiles
+    .filter((t) => t.visible !== false && layerOf(t.document) === "joueurs" && !t.document.hidden && !t.document.locked
+      && tileContains(t.document, p))
+    .sort((a, b) => (b.document.elevation ?? 0) - (a.document.elevation ?? 0) || (b.document.sort ?? 0) - (a.document.sort ?? 0))[0] ?? null;
 }
 
-function guardPlayerTokenCreate(doc) {
-  if (game.user.isGM) return;
-  if (flagOf(doc.actor ?? game.actors.get(doc.actorId)).board) {
-    notify("Seul le MJ pose des images sur le tableau.", "warn");
-    return false;
+let playerDrag = null;
+
+function onPlayerPointerDown(event) {
+  if (game.user.isGM || event.button !== 0 || !canvas?.ready || event.target !== boardElement()) return;
+  const p = canvas.canvasCoordinatesFromClient({ x: event.clientX, y: event.clientY });
+  // Un jeton que le joueur peut prendre (son personnage) reste prioritaire.
+  const token = canvas.tokens?.placeables?.find((t) => t.visible && t.document.isOwner && t.bounds?.contains(p.x, p.y));
+  if (token) return;
+  const tile = playerTileAt(p);
+  if (!tile) return;
+  event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation();
+  const members = groupMembers(canvas.scene, flagOf(tile.document).group)
+    .map((d) => d.object).filter((o) => o && o !== tile);
+  playerDrag = {
+    tile, start: p, moved: false, ox: tile.document.x, oy: tile.document.y,
+    previews: [tile, ...members].map((o) => { const view = o.mesh ?? o.shape ?? o; return { object: o, mesh: view, x: view.x, y: view.y }; })
+  };
+  window.addEventListener("pointermove", onPlayerPointerMove, true);
+  window.addEventListener("pointerup", onPlayerPointerUp, true);
+}
+
+function onPlayerPointerMove(event) {
+  if (!playerDrag) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const p = canvas.canvasCoordinatesFromClient({ x: event.clientX, y: event.clientY });
+  const dx = p.x - playerDrag.start.x, dy = p.y - playerDrag.start.y;
+  if (Math.abs(dx) + Math.abs(dy) > 2) playerDrag.moved = true;
+  for (const pv of playerDrag.previews) pv.mesh.position?.set?.(pv.x + dx, pv.y + dy);
+}
+
+function restorePreview(drag) {
+  for (const pv of drag.previews) pv.mesh.position?.set?.(pv.x, pv.y);
+}
+
+function onPlayerPointerUp(event) {
+  window.removeEventListener("pointermove", onPlayerPointerMove, true);
+  window.removeEventListener("pointerup", onPlayerPointerUp, true);
+  const drag = playerDrag;
+  playerDrag = null;
+  if (!drag) return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (!drag.moved) return restorePreview(drag);
+  const p = canvas.canvasCoordinatesFromClient({ x: event.clientX, y: event.clientY });
+  const doc = drag.tile.document;
+  if (!game.users.activeGM) {
+    restorePreview(drag);
+    return notify("Aucun MJ connecté : l'image ne peut pas être déplacée.", "warn");
   }
+  game.socket.emit(SOCKET, { type: "move", sceneId: doc.parent.id, tileId: doc.id, userId: game.user.id,
+    x: drag.ox + (p.x - drag.start.x), y: drag.oy + (p.y - drag.start.y) });
+  // Sans réponse du MJ (refus, déconnexion), l'image revient à sa place.
+  setTimeout(() => {
+    if (doc.x === drag.ox && doc.y === drag.oy) restorePreview(drag);
+  }, 3000);
+}
+
+/** Côté MJ actif : déplacement demandé par un joueur, vérifié puis appliqué (le groupe suit). */
+function onSocket(message) {
+  if (message?.type !== "move" || !isActiveGM()) return;
+  const scene = game.scenes.get(message.sceneId);
+  const tile = scene?.tiles.get(message.tileId);
+  const user = game.users.get(message.userId);
+  if (!tile || !user || layerOf(tile) !== "joueurs" || tile.hidden || tile.locked) return;
+  const d = scene.dimensions;
+  const x = Math.round(Math.min(Math.max(Number(message.x), -tile.width), (d?.width ?? 1e5)));
+  const y = Math.round(Math.min(Math.max(Number(message.y), -tile.height), (d?.height ?? 1e5)));
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+  tile.update({ x, y }, { [MODULE]: { relay: user.id } }).catch((err) => console.error(`${MODULE} |`, err));
 }
 
 /* ---------------------------------------------------------------------------------------------- */
@@ -419,8 +438,8 @@ function showLarge(doc) {
   const src = doc?.texture?.src;
   if (!src) return;
   const Popout = ImagePopoutClass();
-  const title = doc.name || flagOf(doc).name || baseName(src) || "Image";
-  // showTitle : les joueurs n'ont pas de droit sur le jeton, le titre serait masqué chez eux.
+  const title = flagOf(doc).name || doc.name || baseName(src) || "Image";
+  // showTitle : les joueurs n'ont pas de droit sur la tuile, le titre serait masqué chez eux.
   const popout = new Popout({ src, uuid: doc.uuid, showTitle: true, caption: title, window: { title } });
   popout.render(true);
   popout.shareImage?.();
@@ -544,7 +563,6 @@ function onRenderHUD(hud, html) {
   if (!root || !doc) return;
   const layer = layerOf(doc);
   const isImage = !!layer && !!doc.texture?.src;
-  if (doc.documentName === "Token" && !isImage) return;  // jeton de personnage : rien à ajouter
   const column = root.querySelector(".col.left") ?? root;
   if (column.querySelector(".tableau-hud-box")) return;
   const box = document.createElement("div");
@@ -556,10 +574,8 @@ function onRenderHUD(hud, html) {
     }
     box.append(hudButton("fa-solid fa-expand", "Montrer en grand aux joueurs", () => showLarge(doc)));
   }
-  if (doc.documentName === "Token") {
-    box.append(hudButton(doc.locked ? "fa-solid fa-lock" : "fa-solid fa-lock-open",
-      doc.locked ? "Déverrouiller (avec son groupe)" : "Verrouiller (avec son groupe)", () => toggleLock(targets(doc)), doc.locked));
-  }
+  box.append(hudButton(doc.locked ? "fa-solid fa-lock" : "fa-solid fa-lock-open",
+    doc.locked ? "Déverrouiller (avec son groupe)" : "Verrouiller (avec son groupe)", () => toggleLock(targets(doc)), doc.locked));
   const group = flagOf(doc).group;
   box.append(group
     ? hudButton("fa-solid fa-object-ungroup", "Retirer du groupe", () => ungroup(targets(doc)), true)
@@ -602,7 +618,7 @@ class TableauPanel extends ApplicationV2 {
       return div;
     }
     const counts = { fond: 0, joueurs: 0, mj: 0, mjVisible: 0 };
-    for (const doc of [...scene.tiles, ...scene.tokens]) {
+    for (const doc of scene.tiles) {
       const layer = layerOf(doc);
       if (!layer) continue;
       counts[layer] += 1;
@@ -627,7 +643,7 @@ class TableauPanel extends ApplicationV2 {
           <li><i class="${LAYERS.joueurs.icon}"></i> Joueurs : ${counts.joueurs}</li>
           <li><i class="${LAYERS.mj.icon}"></i> MJ : ${counts.mj}${counts.mjVisible ? ` (${counts.mjVisible} visible${counts.mjVisible > 1 ? "s" : ""})` : ""}</li>
         </ul>
-        <p class="tableau__hint">Déposez une image sur la scène : elle arrive sur le calque MJ, cachée. Clic droit sur une image pour la changer de calque, la verrouiller, la montrer en grand ou la grouper.</p>
+        <p class="tableau__hint">Déposez une image sur la scène : elle arrive sur le calque MJ, cachée. Les images sont des tuiles (outil Tuiles, à gauche) : poignées pour les redimensionner, Maj + molette pour les tourner, clic droit pour les changer de calque, les verrouiller, les montrer en grand ou les grouper.</p>
         <div class="tableau__row">
           ${btn("show-mj", "fa-solid fa-eye", "Montrer le calque MJ")}
           ${btn("hide-mj", "fa-solid fa-eye-slash", "Cacher le calque MJ")}
@@ -711,18 +727,18 @@ class TableauPanel extends ApplicationV2 {
   async run(action, group) {
     const scene = canvas.scene;
     const sel = selection();
-    const boardTokens = (kind) => scene.tokens.filter((t) => layerOf(t) === kind);
+    const boardTiles = (kind) => scene.tiles.filter((t) => layerOf(t) === kind && flagOf(t).layer);
     switch (action) {
-      case "show-mj": return updateMany(boardTokens("mj"), { hidden: false });
-      case "hide-mj": return updateMany(boardTokens("mj"), { hidden: true });
+      case "show-mj": return updateMany(boardTiles("mj"), { hidden: false });
+      case "hide-mj": return updateMany(boardTiles("mj"), { hidden: true });
       case "clear-joueurs":
       case "clear-mj": {
         const kind = action === "clear-mj" ? "mj" : "joueurs";
-        const ids = boardTokens(kind).map((t) => t.id);
+        const ids = boardTiles(kind).map((t) => t.id);
         if (!ids.length) return notify(`Calque ${LAYERS[kind].label} déjà vide.`);
         const ok = await DialogV2().confirm({ window: { title: `Nettoyer le calque ${LAYERS[kind].label}` },
           content: `<p>Retirer les ${ids.length} image(s) du calque ${LAYERS[kind].label} de « ${escapeHtml(scene.name)} » ? Les fichiers restent sur le serveur.</p>` });
-        if (ok) await scene.deleteEmbeddedDocuments("Token", ids);
+        if (ok) await scene.deleteEmbeddedDocuments("Tile", ids);
         return;
       }
       case "to-fond": case "to-joueurs": case "to-mj": return moveToLayer(sel, action.slice(3));
@@ -850,24 +866,26 @@ Hooks.on("getSceneControlButtons", (controls) => {
     visible: true,
     onChange: () => TableauPanel.open()
   };
-  // Foundry 13 et 14 : contrôles indexés par nom ; ancien format en tableau.
-  const tokens = Array.isArray(controls) ? controls.find((c) => c.name === "token") : (controls.tokens ?? controls.token);
-  if (!tokens) return;
-  if (Array.isArray(tokens.tools)) tokens.tools.push({ ...tool, onClick: tool.onChange });
-  else tokens.tools[tool.name] = tool;
+  // Foundry 13 et 14 : contrôles indexés par nom (jetons et tuiles) ; ancien format en tableau.
+  const groups = Array.isArray(controls)
+    ? controls.filter((c) => c.name === "token" || c.name === "tiles")
+    : [controls.tokens ?? controls.token, controls.tiles].filter(Boolean);
+  for (const group of groups) {
+    if (Array.isArray(group.tools)) group.tools.push({ ...tool, onClick: tool.onChange });
+    else group.tools[tool.name] = tool;
+  }
 });
 
 Hooks.once("ready", () => {
   window.addEventListener("drop", onNativeDrop, true);
+  window.addEventListener("pointerdown", onPlayerPointerDown, true);
+  game.socket.on(SOCKET, onSocket);
+  convertLegacyTokens().catch((err) => console.error(`${MODULE} | conversion des jetons`, err));
   const module = game.modules.get(MODULE);
   if (module) module.api = { open: () => TableauPanel.open(), placeImage, moveToLayer, toggleLock, toggleHidden, groupSelection, ungroup, createBoardScene };
 });
 
 Hooks.on("dropCanvasData", onDropCanvasData);
-Hooks.on("moveToken", onMoveToken);
-Hooks.on("preUpdateToken", guardPlayerTokenUpdate);
-Hooks.on("preCreateToken", guardPlayerTokenCreate);
-Hooks.on("renderTokenHUD", onRenderHUD);
 Hooks.on("renderTileHUD", onRenderHUD);
 Hooks.on("renderDrawingHUD", onRenderHUD);
 
@@ -876,4 +894,4 @@ for (const type of GROUPABLE) {
   Hooks.on(`update${type}`, onUpdate);
   for (const event of ["create", "update", "delete"]) Hooks.on(`${event}${type}`, refreshPanel);
 }
-for (const event of ["controlToken", "controlTile", "controlDrawing", "canvasReady", "updateScene"]) Hooks.on(event, refreshPanel);
+for (const event of ["controlTile", "controlDrawing", "canvasReady", "updateScene"]) Hooks.on(event, refreshPanel);
