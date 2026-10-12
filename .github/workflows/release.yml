@@ -12,6 +12,11 @@ on:
 permissions:
   contents: write
 
+# Une release créée dans l'interface pousse aussi son étiquette : les deux déclenchements passent l'un après l'autre.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest
