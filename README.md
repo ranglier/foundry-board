@@ -19,7 +19,7 @@ Installation : Modules complémentaires > Installer un module > manifeste :
   - **Fond** : sous les autres images, verrouillée en y entrant ;
   - **Joueurs** : visible, déplaçable par les joueurs (un simple glisser, même jeu en pause) ;
   - **MJ** : invisible des joueurs, ou visible sans pouvoir être déplacée (œil).
-- Les images se prennent avec l'**outil Tuiles** (barre de gauche), activé automatiquement après un dépôt.
+- Les images sont des tuiles : un clic sur une image, depuis l'outil Jetons, passe tout seul sur l'outil **Tuiles** et la prend ; un clic sur un jeton revient aux Jetons. Une image verrouillée ne se prend plus : « Déverrouiller » dans le panneau.
 - **Clic droit sur une image** : changer de calque, montrer en grand aux joueurs, verrouiller, grouper.
 - **Verrou** sur les images, tuiles et dessins : plus rien ne bouge par accident, même pour le MJ.
 - **Groupes** d'images, de dessins et de formes : ils bougent ensemble, se verrouillent, se montrent et se cachent ensemble. Pour mêler des calques : grouper sur un calque, puis sélectionner sur l'autre et « + » sur le groupe dans le panneau.

@@ -358,6 +358,24 @@ function playerTileAt(p) {
 
 let playerDrag = null;
 
+/* MJ : comme dans Roll20, un clic prend ce qui est sous le pointeur sans changer d'outil à la main. Sur l'outil
+   Jetons, un clic sur une image (aucun jeton dessous) passe sur l'outil Tuiles avant que Foundry ne traite le
+   clic : l'image est prise du premier coup. Sur l'outil Tuiles, un clic sur un jeton revient aux Jetons. */
+function onGMPointerDown(event) {
+  if (!game.user.isGM || event.button !== 0 || !canvas?.ready || event.target !== boardElement()) return;
+  const active = canvas.activeLayer;
+  if (active !== canvas.tokens && active !== canvas.tiles) return;
+  const p = canvas.canvasCoordinatesFromClient({ x: event.clientX, y: event.clientY });
+  const token = canvas.tokens?.placeables?.find((t) => t.visible && t.bounds?.contains(p.x, p.y));
+  if (token) {
+    if (active === canvas.tiles) canvas.tokens.activate();
+    return;
+  }
+  if (active !== canvas.tokens) return;
+  const tile = (canvas.tiles?.placeables ?? []).some((t) => t.visible !== false && tileContains(t.document, p));
+  if (tile) canvas.tiles.activate();
+}
+
 function onPlayerPointerDown(event) {
   if (game.user.isGM || event.button !== 0 || !canvas?.ready || event.target !== boardElement()) return;
   const p = canvas.canvasCoordinatesFromClient({ x: event.clientX, y: event.clientY });
@@ -657,12 +675,13 @@ class TableauPanel extends ApplicationV2 {
       div.innerHTML = "<p>Aucune scène affichée.</p>";
       return div;
     }
-    const counts = { fond: 0, joueurs: 0, mj: 0, mjVisible: 0 };
+    const counts = { fond: 0, joueurs: 0, mj: 0, mjVisible: 0, locked: 0 };
     for (const doc of scene.tiles) {
       const layer = layerOf(doc);
       if (!layer) continue;
       counts[layer] += 1;
       if (layer === "mj" && !doc.hidden) counts.mjVisible += 1;
+      if (doc.locked) counts.locked += 1;
     }
     const names = scene.flags?.[MODULE]?.groups ?? {};
     const groups = new Map();
@@ -683,11 +702,12 @@ class TableauPanel extends ApplicationV2 {
           <li><i class="${LAYERS.joueurs.icon}"></i> Joueurs : ${counts.joueurs}</li>
           <li><i class="${LAYERS.mj.icon}"></i> MJ : ${counts.mj}${counts.mjVisible ? ` (${counts.mjVisible} visible${counts.mjVisible > 1 ? "s" : ""})` : ""}</li>
         </ul>
-        <p class="tableau__hint">Déposez une image sur la scène : elle arrive sur le calque MJ, cachée. Les images sont des tuiles (outil Tuiles, à gauche) : poignées pour les redimensionner, Maj + molette pour les tourner, clic droit pour les changer de calque, les verrouiller, les montrer en grand ou les grouper.</p>
+        <p class="tableau__hint">Déposez une image sur la scène : elle arrive sur le calque MJ, cachée. Les images sont des tuiles : un clic dessus les prend (outil Tuiles activé tout seul), poignées pour les redimensionner, Maj + molette pour les tourner, clic droit pour les changer de calque, les verrouiller, les montrer en grand ou les grouper.</p>
         <div class="tableau__row">
           ${btn("show-mj", "fa-solid fa-eye", "Montrer le calque MJ")}
           ${btn("hide-mj", "fa-solid fa-eye-slash", "Cacher le calque MJ")}
         </div>
+        ${counts.locked ? `<div class="tableau__row">${btn("unlock-all", "fa-solid fa-lock-open", `Déverrouiller les ${counts.locked} image(s) verrouillée(s)`)}</div>` : ""}
         <div class="tableau__row">
           ${btn("clear-joueurs", "fa-solid fa-broom", "Nettoyer Joueurs")}
           ${btn("clear-mj", "fa-solid fa-broom", "Nettoyer MJ")}
@@ -769,6 +789,7 @@ class TableauPanel extends ApplicationV2 {
     const sel = selection();
     const boardTiles = (kind) => scene.tiles.filter((t) => layerOf(t) === kind && flagOf(t).layer);
     switch (action) {
+      case "unlock-all": return updateMany(scene.tiles.filter((t) => t.locked), { locked: false });
       case "show-mj": return updateMany(boardTiles("mj"), { hidden: false });
       case "hide-mj": return updateMany(boardTiles("mj"), { hidden: true });
       case "clear-joueurs":
@@ -921,6 +942,7 @@ Hooks.once("ready", () => {
   window.addEventListener("pointerdown", onWindowImagePointerDown, true);
   window.addEventListener("dragstart", onWindowImageDragStart, true);
   window.addEventListener("pointerdown", onPlayerPointerDown, true);
+  window.addEventListener("pointerdown", onGMPointerDown, true);
   game.socket.on(SOCKET, onSocket);
   convertLegacyTokens().catch((err) => console.error(`${MODULE} | conversion des jetons`, err));
   const module = game.modules.get(MODULE);
