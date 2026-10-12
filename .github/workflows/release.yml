@@ -1,10 +1,13 @@
-# Publie une version du module quand une étiquette vX.Y.Z est poussée : module.json (version et adresses
-# mises à jour) et tableau-de-jeu.zip attachés à la release GitHub.
+# Publie une version du module : module.json (version et adresses mises à jour) et tableau-de-jeu.zip
+# attachés à la release GitHub. Déclenché par une étiquette vX.Y.Z poussée, ou par une release publiée depuis
+# l'interface de GitHub (Releases > Draft a new release > étiquette vX.Y.Z).
 name: Release
 
 on:
   push:
     tags: ["v*"]
+  release:
+    types: [published]
 
 permissions:
   contents: write
@@ -17,7 +20,8 @@ jobs:
 
       - name: Préparer module.json
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          TAG="${{ github.event.release.tag_name || github.ref_name }}"
+          VERSION="${TAG#v}"
           REPO="https://github.com/${GITHUB_REPOSITORY}"
           jq --arg v "$VERSION" --arg r "$REPO" '
             .version = $v
@@ -33,6 +37,7 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event.release.tag_name || github.ref_name }}
           files: |
             module.json
             tableau-de-jeu.zip
