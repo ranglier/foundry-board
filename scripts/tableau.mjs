@@ -822,6 +822,7 @@ const HELP = `
     <li><strong>Dessins</strong> : outil Dessins pour tracer ; ensuite, un clic sur un dessin de la couche active le prend, quel que soit l'outil.</li>
     <li><strong>Déposer</strong> : un fichier de Windows, une image d'une fiche ou d'un journal ouvert, une page image, un objet ; Maj + glisser un acteur pour son portrait.</li>
     <li><strong>Image</strong> : clic pour la prendre, poignées pour la taille, Maj + molette pour la tourner, clic droit pour ses boutons (couche, verrou, en grand, groupe).</li>
+    <li><strong>Scènes</strong> (onglet Scènes) : double-clic pour y aller seul (préchargée chez les joueurs), icône de marche pour y basculer le groupe ; dossiers de scènes de Foundry, à ranger par glisser-déposer.</li>
     <li><strong>Joueurs</strong> : ils déplacent les images de la couche Joueurs (un MJ doit être connecté) ; celles de la couche MJ montrées (œil) restent fixes pour eux.</li>
   </ul>
   <table class="tableau__keys">
@@ -851,7 +852,7 @@ class TableauPanel extends ApplicationV2 {
   constructor(options) {
     super(options);
     // « state » est réservé par ApplicationV2 : nom propre au module.
-    this.tbView = { tab: "couche", help: false, newScene: "Tableau", prepared: "" };
+    this.tbView = { tab: "couche", help: false, newScene: "Tableau", filter: "" };
   }
 
   async _renderHTML() {
@@ -953,26 +954,56 @@ class TableauPanel extends ApplicationV2 {
   scenesTab(scene) {
     const v = this.tbView;
     const active = game.scenes.active;
-    const scenes = game.scenes.filter((s) => s.id !== scene.id).sort((a, b) => a.name.localeCompare(b.name));
     const btn = (action, icon, label, attrs = "") => `<button type="button" data-do="${action}" ${attrs}><i class="${icon}"></i> ${label}</button>`;
+    const { folders, scenes } = sceneTree();
+    const closed = closedFolders();
+    const count = (id) => (scenes.get(id)?.length ?? 0) + (folders.get(id) ?? []).reduce((n, f) => n + count(f.id), 0);
+    const sceneRow = (s) => {
+      const thumb = s.thumb ? `<span class="tableau__thumb" style="background-image: url('${escapeHtml(s.thumb)}')"></span>`
+        : `<span class="tableau__thumb tableau__thumb--empty"><i class="fa-solid fa-map"></i></span>`;
+      return `
+        <li class="tableau__scene ${s.id === scene.id ? "viewed" : ""}" data-scene="${s.id}" draggable="true">
+          ${thumb}
+          <span class="tableau__scene-name">${escapeHtml(s.name)}</span>
+          ${s.id === scene.id ? `<i class="fa-solid fa-eye tableau__here" data-tooltip="Vous êtes ici"></i>` : ""}
+          ${s.active ? `<i class="fa-solid fa-users tableau__here" data-tooltip="Les joueurs sont ici"></i>` : ""}
+          <span class="tableau__row-icons">
+            ${s.active ? "" : `<a data-sdo="activate" data-id="${s.id}" data-tooltip="Basculer le groupe sur cette scène"><i class="fa-solid fa-person-walking-arrow-right"></i></a>`}
+            <a data-sdo="scene-config" data-id="${s.id}" data-tooltip="Configurer la scène"><i class="fa-solid fa-gear"></i></a>
+          </span>
+        </li>`;
+    };
+    const folderNode = (f) => {
+      const isClosed = !!closed[f.id];
+      const color = f.color ? String(f.color.css ?? f.color) : "";
+      return `
+        <li class="tableau__folder ${isClosed ? "closed" : ""}" data-folder="${f.id}">
+          <div class="tableau__folder-head" data-folder-head="${f.id}" draggable="true" ${color ? `style="--fc: ${escapeHtml(color)}"` : ""}>
+            <i class="fa-solid ${isClosed ? "fa-folder" : "fa-folder-open"} tableau__folder-icon"></i>
+            <span class="tableau__scene-name">${escapeHtml(f.name)} <small>(${count(f.id)})</small></span>
+            <span class="tableau__row-icons">
+              <a data-sdo="scene-here" data-id="${f.id}" data-tooltip="Nouvelle scène tableau dans ce dossier"><i class="fa-solid fa-plus"></i></a>
+              <a data-sdo="folder-new" data-id="${f.id}" data-tooltip="Nouveau sous-dossier"><i class="fa-solid fa-folder-plus"></i></a>
+              <a data-sdo="folder-config" data-id="${f.id}" data-tooltip="Nom, couleur, tri"><i class="fa-solid fa-gear"></i></a>
+              <a data-sdo="folder-delete" data-id="${f.id}" data-tooltip="Supprimer le dossier (les scènes restent)"><i class="fa-solid fa-trash"></i></a>
+            </span>
+          </div>
+          <ul>${level(f.id)}</ul>
+        </li>`;
+    };
+    const level = (id) => (folders.get(id) ?? []).map(folderNode).join("") + (scenes.get(id) ?? []).map(sceneRow).join("");
     return `
       <section>
         <p class="tableau__status">Vous : <strong>${escapeHtml(scene.name)}</strong> · joueurs : <strong>${escapeHtml(active?.name ?? "aucune")}</strong></p>
         ${active?.id === scene.id ? "" : `<div class="tableau__row">${btn("activate-here", "fa-solid fa-bullseye", "Amener le groupe ici")}</div>`}
       </section>
       <section>
-        <h3>Scène suivante</h3>
         <div class="tableau__row">
-          <select name="prepared" aria-label="Scène suivante">
-            <option value="">Choisir…</option>
-            ${scenes.map((s) => `<option value="${s.id}" ${s.id === v.prepared ? "selected" : ""}>${escapeHtml(s.name)}${s.active ? " (joueurs)" : ""}</option>`).join("")}
-          </select>
+          <input type="search" name="sceneFilter" value="${escapeHtml(v.filter)}" placeholder="Filtrer les scènes" aria-label="Filtrer les scènes">
+          <button type="button" class="tableau__icon-btn" data-sdo="folder-new" data-tooltip="Nouveau dossier"><i class="fa-solid fa-folder-plus"></i></button>
         </div>
-        <div class="tableau__row">
-          ${btn("prepare", "fa-solid fa-hourglass-half", "Préparer", v.prepared ? "" : "disabled")}
-          ${btn("switch", "fa-solid fa-person-walking-arrow-right", "Basculer le groupe", v.prepared ? "" : "disabled")}
-        </div>
-        <p class="tableau__hint">Préparer : vous y allez seul, elle se précharge chez les joueurs. Basculer : tout le monde y passe.</p>
+        <ul class="tableau__scenes">${level(null)}</ul>
+        <p class="tableau__hint">Double-clic sur une scène : vous y allez seul, elle se précharge chez les joueurs. <i class="fa-solid fa-person-walking-arrow-right"></i> : tout le groupe y passe. Glisser une scène ou un dossier sur un dossier pour l'y ranger, en bas de la liste pour le sortir.</p>
       </section>
       <section>
         <h3>Nouvelle scène tableau</h3>
@@ -981,6 +1012,106 @@ class TableauPanel extends ApplicationV2 {
           ${btn("new-scene", "fa-solid fa-plus", "Créer")}
         </div>
       </section>`;
+  }
+
+  /** Liste des scènes : double-clic, icônes, dossiers repliables, glisser-déposer, filtre. */
+  bindScenes() {
+    const list = this.element.querySelector(".tableau__scenes");
+    if (!list) return;
+    const run = (fn) => Promise.resolve(fn()).catch((err) => {
+      console.error(`${MODULE} |`, err);
+      notify(err.message ?? String(err), "error");
+    });
+    const section = list.closest("section");
+    section.addEventListener("click", (event) => {
+      const icon = event.target.closest("[data-sdo]");
+      if (icon) {
+        event.preventDefault();
+        event.stopPropagation();
+        return run(() => sceneAction(icon.dataset.sdo, icon.dataset.id ?? null, this.tbView.newScene));
+      }
+      const head = event.target.closest("[data-folder-head]");
+      if (head) {
+        const li = head.closest(".tableau__folder");
+        const nowClosed = !li.classList.contains("closed");
+        li.classList.toggle("closed", nowClosed);
+        head.querySelector(".tableau__folder-icon")?.classList.replace(nowClosed ? "fa-folder-open" : "fa-folder", nowClosed ? "fa-folder" : "fa-folder-open");
+        run(() => setFolderClosed(head.dataset.folderHead, nowClosed));
+      }
+    });
+    list.addEventListener("dblclick", (event) => {
+      const row = event.target.closest("[data-scene]");
+      if (!row || event.target.closest("[data-sdo]")) return;
+      event.preventDefault();
+      run(() => viewScene(game.scenes.get(row.dataset.scene)));
+    });
+
+    // Glisser-déposer : une scène ou un dossier, sur un dossier (dedans), une scène (à côté), le bas de la liste (racine).
+    const dropTarget = (event) => {
+      const head = event.target.closest("[data-folder-head]");
+      if (head) return { el: head, folder: head.dataset.folderHead, before: null };
+      const row = event.target.closest("[data-scene]");
+      if (row) {
+        const s = game.scenes.get(row.dataset.scene);
+        return { el: row, folder: s?.folder?.id ?? null, before: s };
+      }
+      if (event.target === list || event.target.closest(".tableau__scenes-root")) return { el: list, folder: null, before: null };
+      return null;
+    };
+    const clear = () => list.querySelectorAll(".drop-target").forEach((el) => el.classList.remove("drop-target"));
+    list.addEventListener("dragstart", (event) => {
+      const head = event.target.closest?.("[data-folder-head]");
+      const row = event.target.closest?.("[data-scene]");
+      const doc = head ? game.folders.get(head.dataset.folderHead) : row ? game.scenes.get(row.dataset.scene) : null;
+      if (!doc) return;
+      event.stopPropagation();
+      sceneDrag = { doc };
+      this.tbDragging = true;
+      list.classList.add("dragging");
+      event.dataTransfer.setData("text/plain", JSON.stringify({ type: doc.documentName, uuid: doc.uuid }));
+      event.dataTransfer.effectAllowed = "move";
+    });
+    list.addEventListener("dragover", (event) => {
+      if (!sceneDrag) return;
+      const target = dropTarget(event);
+      clear();
+      if (!target) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      target.el.classList.add("drop-target");
+    });
+    list.addEventListener("dragleave", (event) => {
+      if (!list.contains(event.relatedTarget)) clear();
+    });
+    list.addEventListener("drop", (event) => {
+      if (!sceneDrag) return;
+      const target = dropTarget(event);
+      const { doc } = sceneDrag;
+      event.preventDefault();
+      event.stopPropagation();
+      clear();
+      if (target) run(() => moveInTree(doc, target.folder, target.before));
+    });
+    list.addEventListener("dragend", () => {
+      sceneDrag = null;
+      this.tbDragging = false;
+      list.classList.remove("dragging");
+      clear();
+      refreshPanel();
+    });
+
+    const filter = this.element.querySelector('[name="sceneFilter"]');
+    filter?.addEventListener("input", (e) => {
+      this.tbView.filter = e.target.value;
+      filterScenes(list, this.tbView.filter);
+    });
+    filterScenes(list, this.tbView.filter);
+    if (!list.querySelector(".tableau__scenes-root")) {
+      const root = document.createElement("li");
+      root.className = "tableau__scenes-root";
+      root.textContent = "Déposer ici : hors de tout dossier";
+      list.append(root);
+    }
   }
 
   _replaceHTML(result, content) {
@@ -1012,7 +1143,7 @@ class TableauPanel extends ApplicationV2 {
       });
     }
     this.element.querySelector('[name="newScene"]')?.addEventListener("input", (e) => { this.tbView.newScene = e.target.value; });
-    this.element.querySelector('[name="prepared"]')?.addEventListener("change", (e) => { this.tbView.prepared = e.target.value; this.render(); });
+    this.bindScenes();
   }
 
   async run(action, group) {
@@ -1060,28 +1191,154 @@ class TableauPanel extends ApplicationV2 {
       }
       case "g-dissolve": return dissolveGroup(scene, group);
       case "new-scene": return createBoardScene(this.tbView.newScene);
-      case "prepare": {
-        const next = game.scenes.get(this.tbView.prepared);
-        if (!next) return notify("Choisissez la scène suivante.", "warn");
-        await game.scenes.preload(next.id, isV14() ? { broadcast: true } : true);
-        await next.view();
-        return notify(`« ${next.name} » préparée : vous seul la voyez, elle est préchargée chez les joueurs.`);
-      }
-      case "switch": {
-        const next = game.scenes.get(this.tbView.prepared);
-        if (!next) return notify("Choisissez la scène suivante.", "warn");
-        await next.activate();
-        this.tbView.prepared = "";
-        return notify(`Le groupe passe sur « ${next.name} ».`);
-      }
       case "activate-here": return scene.activate();
+    }
+  }
+}
+
+/* Arborescence des scènes : les dossiers de scènes de Foundry, les mêmes que dans la barre latérale. */
+
+let sceneDrag = null;
+const SORT_STEP = CONST.SORT_INTEGER_DENSITY ?? 100000;
+
+function rootSortingMode() {
+  return game.scenes.sortingMode ?? "a";
+}
+
+/** Tri d'un niveau : alphabétique (« a ») ou manuel (« m »), comme la barre latérale. */
+function sortLevel(docs, mode) {
+  const byName = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true });
+  return [...docs].sort(mode === "m" ? (a, b) => (a.sort ?? 0) - (b.sort ?? 0) || byName(a, b) : byName);
+}
+
+function parentId(doc) {
+  return doc.folder?.id ?? null;
+}
+
+function sceneTree() {
+  const sceneFolders = game.folders.filter((f) => f.type === "Scene");
+  const mode = (id) => (id ? game.folders.get(id)?.sorting : rootSortingMode()) ?? "a";
+  const group = (docs) => {
+    const map = new Map();
+    for (const d of docs) {
+      const key = parentId(d);
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(d);
+    }
+    for (const [key, list] of map) map.set(key, sortLevel(list, mode(key)));
+    return map;
+  };
+  return { folders: group(sceneFolders), scenes: group(game.scenes.contents) };
+}
+
+function closedFolders() {
+  try { return game.settings.get(MODULE, "closedFolders") ?? {}; } catch (err) { return {}; }
+}
+
+async function setFolderClosed(id, closed) {
+  const map = { ...closedFolders() };
+  if (closed) map[id] = true;
+  else delete map[id];
+  await game.settings.set(MODULE, "closedFolders", map);
+}
+
+/** Filtre sans redessiner : scènes dont le nom contient le texte, avec leurs dossiers ouverts. */
+function filterScenes(list, text) {
+  const norm = (t) => String(t ?? "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+  const q = norm(text).trim();
+  list.classList.toggle("filtering", !!q);
+  for (const row of list.querySelectorAll("[data-scene]")) {
+    row.hidden = !!q && !norm(game.scenes.get(row.dataset.scene)?.name).includes(q);
+  }
+  for (const li of [...list.querySelectorAll(".tableau__folder")].reverse()) {
+    const name = norm(game.folders.get(li.dataset.folder)?.name);
+    li.hidden = !!q && !name.includes(q) && !li.querySelector(":scope > ul > li:not([hidden])");
+  }
+}
+
+/** Vous y allez seul ; la scène se précharge chez les joueurs pour la bascule. */
+async function viewScene(next) {
+  if (!next || next.id === canvas.scene?.id) return;
+  try {
+    await game.scenes.preload(next.id, isV14() ? { broadcast: true } : true);
+  } catch (err) { console.warn(`${MODULE} | préchargement`, err); }
+  await next.view();
+}
+
+function folderDepth(folder) {
+  let depth = 0;
+  for (let f = folder; f; f = f.folder) depth += 1;
+  return depth;
+}
+
+function folderHeight(folder) {
+  const children = game.folders.filter((f) => f.type === "Scene" && parentId(f) === folder.id);
+  return 1 + Math.max(0, ...children.map(folderHeight));
+}
+
+/** Range une scène ou un dossier dans un dossier (null : racine), juste avant « before » en tri manuel. */
+async function moveInTree(doc, folderId, before = null) {
+  if (before === doc) return;
+  if (doc.documentName === "Folder") {
+    const target = folderId ? game.folders.get(folderId) : null;
+    for (let f = target; f; f = f.folder) {
+      if (f === doc) return notify("Un dossier ne peut pas aller dans lui-même ou un de ses sous-dossiers.", "warn");
+    }
+    const max = CONST.FOLDER_MAX_DEPTH ?? 4;
+    if (folderDepth(target) + folderHeight(doc) > max) return notify(`Pas plus de ${max} niveaux de dossiers.`, "warn");
+    if (parentId(doc) === folderId) return;
+    return doc.update({ folder: folderId });
+  }
+  const mode = (folderId ? game.folders.get(folderId)?.sorting : rootSortingMode()) ?? "a";
+  if (mode !== "m" || !before) {
+    if (parentId(doc) === folderId) return;
+    return doc.update({ folder: folderId });
+  }
+  // Tri manuel : renumérote le niveau avec la scène placée avant « before ».
+  const siblings = sortLevel(game.scenes.filter((s) => parentId(s) === folderId && s !== doc), "m");
+  siblings.splice(Math.max(0, siblings.indexOf(before)), 0, doc);
+  const updates = siblings.map((s, i) => ({ _id: s.id, sort: (i + 1) * SORT_STEP, ...(s === doc ? { folder: folderId } : {}) }));
+  await Scene.implementation.updateDocuments(updates);
+}
+
+async function sceneAction(action, id, newSceneName) {
+  switch (action) {
+    case "activate": {
+      const next = game.scenes.get(id);
+      if (!next) return;
+      await next.activate();
+      return notify(`Le groupe passe sur « ${next.name} ».`);
+    }
+    case "scene-config": return game.scenes.get(id)?.sheet?.render(true);
+    case "scene-here": return createBoardScene(newSceneName, id);
+    case "folder-new": {
+      const parent = id ? game.folders.get(id) : null;
+      if (parent && folderDepth(parent) >= (CONST.FOLDER_MAX_DEPTH ?? 4)) return notify("Profondeur maximale de dossiers atteinte.", "warn");
+      const name = await DialogV2().prompt({
+        window: { title: parent ? `Nouveau dossier dans « ${parent.name} »` : "Nouveau dossier de scènes" },
+        content: `<input type="text" name="name" value="Nouveau dossier" autofocus>`,
+        ok: { label: "Créer", callback: (event, button) => button.form.elements.name.value }
+      });
+      if (!name?.trim()) return;
+      const folder = await Folder.implementation.create({ name: name.trim(), type: "Scene", folder: id, sorting: "a" });
+      if (parent) await setFolderClosed(parent.id, false);
+      return folder;
+    }
+    case "folder-config": return game.folders.get(id)?.sheet?.render(true);
+    case "folder-delete": {
+      const folder = game.folders.get(id);
+      if (!folder) return;
+      const ok = await DialogV2().confirm({ window: { title: "Supprimer le dossier" },
+        content: `<p>Supprimer le dossier « ${escapeHtml(folder.name)} » ? Ses scènes et sous-dossiers remontent d'un niveau, rien n'est supprimé d'autre.</p>` });
+      if (!ok) return;
+      return folder.delete({ deleteSubfolders: false, deleteContents: false });
     }
   }
 }
 
 const BOARD_COLOR = "#2e3138";
 
-async function createBoardScene(name) {
+async function createBoardScene(name, folderId = null) {
   const v14 = isV14();
   const fogModes = CONST.FOG_EXPLORATION_MODES;
   const scene = await Scene.implementation.create({
@@ -1093,6 +1350,7 @@ async function createBoardScene(name) {
     ...(v14 ? {} : { backgroundColor: BOARD_COLOR }),
     environment: { globalLight: { enabled: true } },
     navigation: true,
+    folder: folderId,
     flags: { [MODULE]: { board: true } }
   });
   // Foundry 14 : la couleur de fond appartient au niveau de la scène.
@@ -1119,6 +1377,7 @@ function refreshPanel() {
   refreshTimer = setTimeout(() => {
     // Pas pendant une saisie (nom de scène, choix de la scène suivante) : le champ perdrait le focus.
     if (app.element?.contains(document.activeElement) && document.activeElement.matches("input, select")) return;
+    if (app.tbDragging) return;  // un glisser en cours dans la liste des scènes : redessiné à la fin
     app.render();
   }, 150);
 }
@@ -1147,6 +1406,7 @@ Hooks.once("init", () => {
     scope: "client", config: true, type: Boolean, default: true, onChange: () => renderCoucheBar() });
   game.settings.register(MODULE, "badge", { name: "Pastille au survol des images", hint: "Couche, visibilité et verrou de l'image sous le pointeur.",
     scope: "client", config: true, type: Boolean, default: true });
+  game.settings.register(MODULE, "closedFolders", { scope: "client", config: false, type: Object, default: {} });
   game.settings.register(MODULE, "migrated12", { scope: "world", config: false, type: Boolean, default: false });
   keybinding("couche-fond", "Couche active : Fond", "Digit1", () => setCouche("fond"));
   keybinding("couche-joueurs", "Couche active : Joueurs", "Digit2", () => setCouche("joueurs"));
@@ -1217,4 +1477,5 @@ for (const type of GROUPABLE) {
   Hooks.on(`update${type}`, onUpdate);
   for (const event of ["create", "update", "delete"]) Hooks.on(`${event}${type}`, refreshPanel);
 }
-for (const event of ["controlTile", "controlDrawing", "canvasReady", "updateScene"]) Hooks.on(event, refreshPanel);
+for (const event of ["controlTile", "controlDrawing", "canvasReady"]) Hooks.on(event, refreshPanel);
+for (const type of ["Scene", "Folder"]) for (const event of ["create", "update", "delete"]) Hooks.on(`${event}${type}`, refreshPanel);

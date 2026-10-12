@@ -24,7 +24,11 @@ Installation : Modules complémentaires > Installer un module > manifeste :
 - **Panneau « Tableau de jeu »** (Maj+B, bouton de la barre) en trois onglets :
   - **Couche** : couche active et son contenu, tout montrer / cacher, tout déverrouiller, vider la couche, actions sur la sélection ;
   - **Groupes** : liste, ajout, verrou, visibilité, renommage ;
-  - **Scènes** : où vous êtes et où sont les joueurs, préparer la scène suivante (préchargée chez eux, vue de vous seul) puis y basculer le groupe, nouvelle scène tableau (sans grille ni brouillard).
+  - **Scènes** : où vous êtes et où sont les joueurs, et la liste des scènes rangée dans les dossiers de scènes de Foundry (les mêmes que dans la barre latérale) :
+    - **double-clic** sur une scène : vous y allez seul, elle se précharge chez les joueurs ; icône de marche : tout le groupe y passe ; roue dentée : configuration de la scène ;
+    - **dossiers** : nouveau dossier (en haut de la liste ou dans un dossier), nom, couleur et tri (alphabétique ou manuel) par la roue dentée, suppression (les scènes remontent d'un niveau), repli au clic, mémorisé ;
+    - **glisser-déposer** une scène ou un dossier sur un dossier pour l'y ranger, sur une scène pour le mettre à côté (à sa place si le dossier est en tri manuel), sur la zone du bas pour le sortir de tout dossier ;
+    - filtre par nom, nouvelle scène tableau (sans grille ni brouillard), à la racine ou dans un dossier (« + » du dossier).
   - Bouton **?** : gestes et raccourcis.
 
 ## Raccourcis (modifiables dans Configurer les contrôles)
