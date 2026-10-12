@@ -467,6 +467,33 @@ async function dataUrlToFile(src, name) {
   return new File([blob], `${name || "image"}.${ext}`, { type: blob.type });
 }
 
+/* Images des fenêtres de Foundry (portrait d'une fiche, image d'une page de journal, image dans le texte) :
+   rendues glissables pour le MJ, avec l'adresse de l'image comme donnée de glisser. Ce qui est déjà
+   glissable (ligne d'objet d'une fiche, entrée de la barre latérale) et l'éditeur de texte ne sont pas touchés. */
+const IMAGE_DRAG = "TableauImage";
+
+function draggableWindowImage(target) {
+  if (!game.user.isGM || !(target instanceof HTMLImageElement)) return null;
+  if (!target.closest(".application, .app, .window-app")) return null;
+  if (target.closest("#sidebar, .directory, [contenteditable='true'], .editor-content.editing")) return null;
+  if (target.parentElement?.closest("[draggable='true']")) return null;
+  const src = normalizeSrc(target.currentSrc || target.getAttribute("src"));
+  return src ? { src, name: target.getAttribute("alt") || target.getAttribute("title") || target.dataset.tooltip || "" } : null;
+}
+
+function onWindowImagePointerDown(event) {
+  const img = draggableWindowImage(event.target);
+  if (img) event.target.draggable = true;
+}
+
+function onWindowImageDragStart(event) {
+  const img = draggableWindowImage(event.target);
+  if (!img) return;
+  event.stopPropagation();
+  event.dataTransfer.setData("text/plain", JSON.stringify({ type: IMAGE_DRAG, ...img }));
+  event.dataTransfer.effectAllowed = "copy";
+}
+
 /** Dépôt du navigateur sur la scène : fichiers de l'ordinateur, <img> glissée d'un journal ou d'une fiche. */
 function onNativeDrop(event) {
   const board = boardElement();
@@ -474,7 +501,20 @@ function onNativeDrop(event) {
   const dt = event.dataTransfer;
   if (!dt) return;
   const text = dt.getData("text/plain");
-  if (text && text.trim().startsWith("{")) return;  // document de Foundry : laissé à dropCanvasData
+  let json = null;
+  if (text && text.trim().startsWith("{")) {
+    try { json = JSON.parse(text); } catch (err) { json = null; }
+    // Document de Foundry (page, objet, acteur…) : laissé à dropCanvasData.
+    if (json?.type !== IMAGE_DRAG) return;
+  }
+  if (json?.type === IMAGE_DRAG) {
+    event.preventDefault();
+    event.stopPropagation();
+    const point = canvas.canvasCoordinatesFromClient({ x: event.clientX, y: event.clientY });
+    placeImage({ src: json.src, name: json.name, x: point.x, y: point.y })
+      .catch((err) => notify(`Image non posée : ${err.message ?? err}`, "error"));
+    return;
+  }
   // Une <img> de Foundry glissée peut aussi remplir dt.files : l'adresse sur le serveur est alors préférée.
   const fromPage = dt.types?.includes?.("text/html") ? imageFromTransfer(dt) : null;
   const local = fromPage?.src && !/^(https?:|data:)/.test(fromPage.src);
@@ -878,6 +918,8 @@ Hooks.on("getSceneControlButtons", (controls) => {
 
 Hooks.once("ready", () => {
   window.addEventListener("drop", onNativeDrop, true);
+  window.addEventListener("pointerdown", onWindowImagePointerDown, true);
+  window.addEventListener("dragstart", onWindowImageDragStart, true);
   window.addEventListener("pointerdown", onPlayerPointerDown, true);
   game.socket.on(SOCKET, onSocket);
   convertLegacyTokens().catch((err) => console.error(`${MODULE} | conversion des jetons`, err));

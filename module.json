@@ -2,7 +2,7 @@
   "id": "tableau-de-jeu",
   "title": "Tableau de jeu",
   "description": "Foundry comme tableau blanc, à la Roll20 : glisser-déposer des images (journaux, fiches, objets, fichiers) sur la scène, trois calques Fond / Joueurs / MJ, visibilité et verrou par image, groupes d'images et de dessins, montrer en grand, scènes « tableau », nettoyage et bascule de scène.",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "authors": [{ "name": "Jules Brayard" }],
   "compatibility": {
     "minimum": "13",

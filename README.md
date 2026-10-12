@@ -10,7 +10,8 @@ Installation : Modules complémentaires > Installer un module > manifeste :
 
 - **Glisser-déposer d'images sur la scène**, depuis :
   - une page image d'un journal (depuis le sommaire du journal) ou une image dans le texte d'un journal ;
-  - le portrait d'une fiche de personnage ou de PNJ (glisser le portrait de la fiche ouverte, ou Maj + glisser l'acteur depuis la barre latérale) ;
+  - toute image d'une fenêtre ouverte : portrait d'une fiche de personnage ou de PNJ, image d'une page de journal, image dans le texte d'un journal (glisser l'image elle-même, pas la fenêtre) ;
+  - un acteur de la barre latérale avec **Maj** enfoncée : son portrait (sans Maj, c'est un jeton, comme d'habitude) ;
   - un objet (glisser l'objet : son image est posée) ;
   - un fichier de l'ordinateur (envoyé dans `worlds/<monde>/tableau/`).
   L'image arrive **sur le calque MJ, cachée**, à l'endroit du dépôt.
