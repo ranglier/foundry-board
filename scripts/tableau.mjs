@@ -56,9 +56,18 @@ function notify(message, type = "info") {
 
 /** Calque d'une tuile (Fond par défaut pour une tuile posée sans le module). */
 function layerOf(doc) {
-  if (doc?.documentName !== "Tile") return null;
   const layer = flagOf(doc).layer;
-  return LAYERS[layer] ? layer : "fond";
+  if (doc?.documentName === "Tile") return LAYERS[layer] ? layer : "fond";
+  // Dessins et formes : couche du module, sinon Joueurs s'ils sont visibles, MJ s'ils sont cachés.
+  if (doc?.documentName === "Drawing") return LAYERS[layer] ? layer : (doc.hidden ? "mj" : "joueurs");
+  return null;
+}
+
+/** Largeur et hauteur d'une tuile ou d'un dessin (forme). */
+function sizeOf(doc) {
+  return doc.documentName === "Drawing"
+    ? { w: doc.shape?.width ?? 0, h: doc.shape?.height ?? 0 }
+    : { w: doc.width ?? 0, h: doc.height ?? 0 };
 }
 
 /** Image et géométrie (pixels) d'une tuile, ou d'un jeton d'image de la version 1.0. */
@@ -179,19 +188,21 @@ async function placeImage({ src, name, x, y, layer = activeCouche() }) {
 /** Fait passer des tuiles sur un autre calque (position, taille, rotation, groupe gardés). */
 async function moveToLayer(docs, layer) {
   if (!game.user.isGM) return;
-  const items = docs.filter((d) => d.documentName === "Tile" && layerOf(d) !== layer);
+  const items = docs.filter((d) => layerOf(d) && layerOf(d) !== layer);
   if (!items.length) return;
   const byScene = new Map();
   for (const doc of items) {
-    if (!byScene.has(doc.parent)) byScene.set(doc.parent, []);
-    const update = { _id: doc.id, [`flags.${MODULE}.layer`]: layer, sort: sortFor(doc.parent, layer) };
+    const key = `${doc.parent.uuid}|${doc.documentName}`;
+    if (!byScene.has(key)) byScene.set(key, { scene: doc.parent, type: doc.documentName, updates: [] });
+    const update = { _id: doc.id, [`flags.${MODULE}.layer`]: layer };
+    if (doc.documentName === "Tile") update.sort = sortFor(doc.parent, layer);
     if (layer === "fond") update.hidden = false;  // le Fond est protégé en n'étant pas la couche active
     if (layer === "joueurs") update.hidden = false;
     if (layer === "mj") update.hidden = true;     // entrer sur le calque MJ : caché par défaut
-    byScene.get(doc.parent).push(update);
+    byScene.get(key).updates.push(update);
   }
-  for (const [scene, updates] of byScene) await scene.updateEmbeddedDocuments("Tile", updates, { [MODULE]: { sync: true } });
-  notify(`${items.length} image(s) envoyée(s) sur la couche ${LAYERS[layer].label}${layer === activeCouche() ? "" : ` (Maj+${LAYER_ORDER.indexOf(layer) + 1} pour y aller)`}.`);
+  for (const { scene, type, updates } of byScene.values()) await scene.updateEmbeddedDocuments(type, updates, { [MODULE]: { sync: true } });
+  notify(`${items.length} élément(s) envoyé(s) sur la couche ${LAYERS[layer].label}${layer === activeCouche() ? "" : ` (Maj+${LAYER_ORDER.indexOf(layer) + 1} pour y aller)`}.`);
 }
 
 /** Version 1.0 : les images étaient des jetons d'acteurs du module ; converties en tuiles (MJ actif). */
@@ -272,8 +283,8 @@ async function toggleLock(docs) {
 }
 
 async function toggleHidden(docs) {
-  const all = withGroups(docs).filter((d) => d.documentName !== "Tile" || layerOf(d) !== "fond");
-  if (!all.length) return notify("Le calque Fond est toujours visible : passez l'image sur le calque MJ pour la cacher.", "warn");
+  const all = withGroups(docs).filter((d) => layerOf(d) !== "fond");
+  if (!all.length) return notify("Le calque Fond est toujours visible : passez l'élément sur la couche MJ pour le cacher.", "warn");
   const hide = !all.every((d) => d.hidden);
   await updateMany(all, { hidden: hide });
   notify(hide ? "Caché aux joueurs." : "Visible des joueurs.");
@@ -347,22 +358,32 @@ function onUpdate(doc, change, options) {
 
 /** Le point (coordonnées de la scène) est-il dans la tuile, rotation comprise ? */
 function tileContains(doc, p) {
-  const cx = doc.x + doc.width / 2;
-  const cy = doc.y + doc.height / 2;
+  const { w, h } = sizeOf(doc);
+  const cx = doc.x + w / 2;
+  const cy = doc.y + h / 2;
   const a = -((doc.rotation ?? 0) * Math.PI) / 180;
   const dx = p.x - cx, dy = p.y - cy;
   const lx = dx * Math.cos(a) - dy * Math.sin(a);
   const ly = dx * Math.sin(a) + dy * Math.cos(a);
-  return Math.abs(lx) <= doc.width / 2 && Math.abs(ly) <= doc.height / 2;
+  return Math.abs(lx) <= w / 2 && Math.abs(ly) <= h / 2;
 }
 
-/** Tuile du calque Joueurs la plus haute sous le point, déplaçable par les joueurs. */
+/** Images et dessins de la scène affichée, du plus haut au plus bas (un dessin passe au-dessus d'une image). */
+function boardObjectsAt(p, filter = () => true) {
+  const objects = [...(canvas.drawings?.placeables ?? []), ...(canvas.tiles?.placeables ?? [])];
+  return objects
+    .filter((o) => o.visible !== false && o.document && filter(o.document) && tileContains(o.document, p))
+    .sort((a, b) => (b.document.elevation ?? 0) - (a.document.elevation ?? 0)
+      || (b.document.documentName === "Drawing") - (a.document.documentName === "Drawing")
+      || (b.document.sort ?? 0) - (a.document.sort ?? 0));
+}
+
+/** Image ou dessin de la couche Joueurs le plus haut sous le point, déplaçable par les joueurs. Un dessin du
+    joueur lui-même, sur l'outil Dessins, reste à Foundry. */
 function playerTileAt(p) {
-  const tiles = canvas.tiles?.placeables ?? [];
-  return tiles
-    .filter((t) => t.visible !== false && layerOf(t.document) === "joueurs" && !t.document.hidden && !t.document.locked
-      && tileContains(t.document, p))
-    .sort((a, b) => (b.document.elevation ?? 0) - (a.document.elevation ?? 0) || (b.document.sort ?? 0) - (a.document.sort ?? 0))[0] ?? null;
+  const ownDrawings = canvas.drawings?.active;
+  return boardObjectsAt(p, (d) => layerOf(d) === "joueurs" && !d.hidden && !d.locked
+    && !(ownDrawings && d.documentName === "Drawing" && d.isOwner))[0] ?? null;
 }
 
 let playerDrag = null;
@@ -373,17 +394,20 @@ let playerDrag = null;
 function onGMPointerDown(event) {
   if (!game.user.isGM || event.button !== 0 || !canvas?.ready || event.target !== boardElement()) return;
   const active = canvas.activeLayer;
-  if (active !== canvas.tokens && active !== canvas.tiles) return;
+  if (![canvas.tokens, canvas.tiles, canvas.drawings].includes(active)) return;
+  // Outil de tracé (main levée, rectangle…) : le clic dessine, il ne prend rien.
+  const tool = ui.controls?.tool?.name ?? ui.controls?.activeTool;
+  if (active !== canvas.tokens && tool && tool !== "select") return;
   const p = canvas.canvasCoordinatesFromClient({ x: event.clientX, y: event.clientY });
   const token = canvas.tokens?.placeables?.find((t) => t.visible && t.bounds?.contains(p.x, p.y));
   if (token) {
-    if (active === canvas.tiles) canvas.tokens.activate();
+    if (active !== canvas.tokens) canvas.tokens.activate();
     return;
   }
-  if (active !== canvas.tokens) return;
-  const tile = (canvas.tiles?.placeables ?? []).some((t) => t.visible !== false && layerOf(t.document) === activeCouche()
-    && tileContains(t.document, p));
-  if (tile) canvas.tiles.activate();
+  const object = boardObjectsAt(p, (d) => layerOf(d) === activeCouche())[0];
+  if (!object) return;
+  const target = object.document.documentName === "Drawing" ? canvas.drawings : canvas.tiles;
+  if (active !== target) target.activate({ tool: "select" });
 }
 
 function onPlayerPointerDown(event) {
@@ -401,7 +425,7 @@ function onPlayerPointerDown(event) {
     .map((d) => d.object).filter((o) => o && o !== tile);
   playerDrag = {
     tile, start: p, moved: false, ox: tile.document.x, oy: tile.document.y,
-    previews: [tile, ...members].map((o) => { const view = o.mesh ?? o.shape ?? o; return { object: o, mesh: view, x: view.x, y: view.y }; })
+    previews: [tile, ...members].map((o) => { const view = o.document?.documentName === "Drawing" ? o : (o.mesh ?? o); return { object: o, mesh: view, x: view.x, y: view.y }; })
   };
   window.addEventListener("pointermove", onPlayerPointerMove, true);
   window.addEventListener("pointerup", onPlayerPointerUp, true);
@@ -436,7 +460,7 @@ function onPlayerPointerUp(event) {
     restorePreview(drag);
     return notify("Aucun MJ connecté : l'image ne peut pas être déplacée.", "warn");
   }
-  game.socket.emit(SOCKET, { type: "move", sceneId: doc.parent.id, tileId: doc.id, userId: game.user.id,
+  game.socket.emit(SOCKET, { type: "move", sceneId: doc.parent.id, docType: doc.documentName, tileId: doc.id, userId: game.user.id,
     x: drag.ox + (p.x - drag.start.x), y: drag.oy + (p.y - drag.start.y) });
   // Sans réponse du MJ (refus, déconnexion), l'image revient à sa place.
   setTimeout(() => {
@@ -448,12 +472,14 @@ function onPlayerPointerUp(event) {
 function onSocket(message) {
   if (message?.type !== "move" || !isActiveGM()) return;
   const scene = game.scenes.get(message.sceneId);
-  const tile = scene?.tiles.get(message.tileId);
+  const type = message.docType === "Drawing" ? "Drawing" : "Tile";
+  const tile = scene?.getEmbeddedCollection(type).get(message.tileId);
   const user = game.users.get(message.userId);
   if (!tile || !user || layerOf(tile) !== "joueurs" || tile.hidden || tile.locked) return;
   const d = scene.dimensions;
-  const x = Math.round(Math.min(Math.max(Number(message.x), -tile.width), (d?.width ?? 1e5)));
-  const y = Math.round(Math.min(Math.max(Number(message.y), -tile.height), (d?.height ?? 1e5)));
+  const size = sizeOf(tile);
+  const x = Math.round(Math.min(Math.max(Number(message.x), -size.w), (d?.width ?? 1e5)));
+  const y = Math.round(Math.min(Math.max(Number(message.y), -size.h), (d?.height ?? 1e5)));
   if (!Number.isFinite(x) || !Number.isFinite(y)) return;
   tile.update({ x, y }, { [MODULE]: { relay: user.id } }).catch((err) => console.error(`${MODULE} |`, err));
 }
@@ -630,18 +656,18 @@ function onRenderHUD(hud, html) {
   const doc = hud.document ?? hud.object?.document;
   if (!root || !doc) return;
   const layer = layerOf(doc);
-  const isImage = !!layer && !!doc.texture?.src;
+  const isImage = doc.documentName === "Tile" && !!doc.texture?.src;
   const column = root.querySelector(".col.left") ?? root;
   if (column.querySelector(".tableau-hud-box")) return;
   const box = document.createElement("div");
   box.className = "tableau-hud-box";
-  if (isImage) {
+  if (layer) {
     for (const key of LAYER_ORDER) {
       box.append(hudButton(LAYERS[key].icon, `Calque ${LAYERS[key].label} : ${LAYERS[key].hint}`,
         () => (key === layer ? null : moveToLayer(targets(doc), key)), key === layer));
     }
-    box.append(hudButton("fa-solid fa-expand", "Montrer en grand aux joueurs", () => showLarge(doc)));
   }
+  if (isImage) box.append(hudButton("fa-solid fa-expand", "Montrer en grand aux joueurs", () => showLarge(doc)));
   box.append(hudButton(doc.locked ? "fa-solid fa-lock" : "fa-solid fa-lock-open",
     doc.locked ? "Déverrouiller (avec son groupe)" : "Verrouiller (avec son groupe)", () => toggleLock(targets(doc)), doc.locked));
   const group = flagOf(doc).group;
@@ -677,9 +703,9 @@ async function setCouche(layer, { activateTiles = true } = {}) {
 /** Interactivité des tuiles selon la couche active (MJ seulement), barre, liseré, panneau. */
 function applyCouche() {
   if (!game.user.isGM) return;
-  for (const tile of canvas?.tiles?.placeables ?? []) applyTileCouche(tile);
-  for (const tile of [...(canvas?.tiles?.controlled ?? [])]) {
-    if (layerOf(tile.document) !== activeCouche()) tile.release();
+  for (const object of [...(canvas?.tiles?.placeables ?? []), ...(canvas?.drawings?.placeables ?? [])]) applyTileCouche(object);
+  for (const object of [...(canvas?.tiles?.controlled ?? []), ...(canvas?.drawings?.controlled ?? [])]) {
+    if (layerOf(object.document) !== activeCouche()) object.release();
   }
   renderCoucheBar();
   refreshPanel();
@@ -690,7 +716,14 @@ function applyTileCouche(tile) {
   const inCouche = layerOf(tile.document) === activeCouche();
   // Hors de la couche active : le clic passe à travers (eventMode de PIXI), comme dans Roll20.
   if (!inCouche) tile.eventMode = "none";
-  else if (canvas.tiles?.active && tile.eventMode === "none") tile.eventMode = "static";
+  else if (tile.layer?.active && tile.eventMode === "none") tile.eventMode = "static";
+}
+
+/** Nouveau dessin ou forme : rangé sur la couche active du MJ (caché sur la couche MJ), Joueurs pour un joueur. */
+function onPreCreateDrawing(doc, data, options, userId) {
+  if (userId !== game.user.id || flagOf(doc).layer) return;
+  const layer = game.user.isGM ? activeCouche() : "joueurs";
+  doc.updateSource({ [`flags.${MODULE}.layer`]: layer, ...(layer === "mj" ? { hidden: true } : {}) });
 }
 
 /** Sélection au cadre (ou par programme) d'une image d'une autre couche : relâchée aussitôt. */
@@ -752,12 +785,10 @@ function updateHoverBadge() {
   let badge = document.getElementById("tableau-hover-badge");
   const hide = () => { if (badge) badge.hidden = true; };
   if (!lastPointer || !canvas?.ready || lastPointer.target !== boardElement() || !game.settings.get(MODULE, "badge")) return hide();
-  if (canvas.activeLayer !== canvas.tiles && canvas.activeLayer !== canvas.tokens) return hide();
+  if (![canvas.tiles, canvas.tokens, canvas.drawings].includes(canvas.activeLayer)) return hide();
   const p = canvas.canvasCoordinatesFromClient({ x: lastPointer.x, y: lastPointer.y });
   if (canvas.tokens?.placeables?.some((t) => t.visible && t.bounds?.contains(p.x, p.y))) return hide();
-  const tile = (canvas.tiles?.placeables ?? [])
-    .filter((t) => t.visible !== false && tileContains(t.document, p))
-    .sort((a, b) => (b.document.elevation ?? 0) - (a.document.elevation ?? 0) || (b.document.sort ?? 0) - (a.document.sort ?? 0))[0];
+  const tile = boardObjectsAt(p)[0];
   if (!tile) return hide();
   if (!badge) {
     badge = document.createElement("div");
@@ -769,7 +800,7 @@ function updateHoverBadge() {
   const other = layer !== activeCouche();
   badge.style.setProperty("--c", COUCHE_COLORS[layer]);
   badge.classList.toggle("is-other", other);
-  badge.innerHTML = `<i class="${LAYERS[layer].icon}"></i> ${LAYERS[layer].label}`
+  badge.innerHTML = `<i class="${LAYERS[layer].icon}"></i> ${LAYERS[layer].label}${doc.documentName === "Drawing" ? " · dessin" : ""}`
     + (doc.hidden ? ' · <i class="fa-solid fa-eye-slash"></i> cachée' : "")
     + (doc.locked ? ' · <i class="fa-solid fa-lock"></i>' : "")
     + (flagOf(doc).group ? ' · <i class="fa-solid fa-object-group"></i>' : "")
@@ -787,7 +818,8 @@ const { ApplicationV2 } = foundry.applications.api;
 
 const HELP = `
   <ul>
-    <li><strong>Couche active</strong> (barre en haut de la scène, Maj+1 / 2 / 3) : seules ses images se prennent. Une image déposée y arrive (cachée sur la couche MJ).</li>
+    <li><strong>Couche active</strong> (barre en haut de la scène, Maj+1 / 2 / 3) : seuls ses images et dessins se prennent. Une image déposée ou un dessin tracé y arrive (caché sur la couche MJ).</li>
+    <li><strong>Dessins</strong> : outil Dessins pour tracer ; ensuite, un clic sur un dessin de la couche active le prend, quel que soit l'outil.</li>
     <li><strong>Déposer</strong> : un fichier de Windows, une image d'une fiche ou d'un journal ouvert, une page image, un objet ; Maj + glisser un acteur pour son portrait.</li>
     <li><strong>Image</strong> : clic pour la prendre, poignées pour la taille, Maj + molette pour la tourner, clic droit pour ses boutons (couche, verrou, en grand, groupe).</li>
     <li><strong>Joueurs</strong> : ils déplacent les images de la couche Joueurs (un MJ doit être connecté) ; celles de la couche MJ montrées (œil) restent fixes pour eux.</li>
@@ -847,8 +879,10 @@ class TableauPanel extends ApplicationV2 {
   coucheTab(scene) {
     const current = activeCouche();
     const tiles = scene.tiles.filter((t) => layerOf(t) === current);
-    const visible = tiles.filter((t) => !t.hidden).length;
-    const locked = tiles.filter((t) => t.locked).length;
+    const drawings = scene.drawings.filter((d) => layerOf(d) === current);
+    const all = [...tiles, ...drawings];
+    const visible = all.filter((t) => !t.hidden).length;
+    const locked = all.filter((t) => t.locked).length;
     const sel = selection();
     const btn = (action, icon, label, attrs = "") => `<button type="button" data-do="${action}" ${attrs}><i class="${icon}"></i> ${label}</button>`;
     const others = LAYER_ORDER.filter((k) => k !== current);
@@ -858,13 +892,13 @@ class TableauPanel extends ApplicationV2 {
           ${LAYER_ORDER.map((k) => `<button type="button" data-couche="${k}" class="${k === current ? "active" : ""}" style="--c: ${COUCHE_COLORS[k]}"><i class="${LAYERS[k].icon}"></i> ${LAYERS[k].label}</button>`).join("")}
         </div>
         <p class="tableau__status" style="--c: ${COUCHE_COLORS[current]}">
-          <strong>${LAYERS[current].label}</strong> · ${tiles.length} image${tiles.length > 1 ? "s" : ""}
+          <strong>${LAYERS[current].label}</strong> · ${tiles.length} image${tiles.length > 1 ? "s" : ""}${drawings.length ? ` · ${drawings.length} dessin${drawings.length > 1 ? "s" : ""}` : ""}
           ${current === "mj" ? ` · ${visible} visible${visible > 1 ? "s" : ""} des joueurs` : ""}${locked ? ` · ${locked} verrouillée${locked > 1 ? "s" : ""}` : ""}
         </p>
         <div class="tableau__row">
           ${current === "mj" ? btn("show-couche", "fa-solid fa-eye", "Tout montrer") + btn("hide-couche", "fa-solid fa-eye-slash", "Tout cacher") : ""}
           ${locked ? btn("unlock-couche", "fa-solid fa-lock-open", "Tout déverrouiller") : ""}
-          ${btn("clear-couche", "fa-solid fa-broom", "Vider la couche", tiles.length ? "" : "disabled")}
+          ${btn("clear-couche", "fa-solid fa-broom", "Vider la couche", all.length ? "" : "disabled")}
         </div>
       </section>
       <section>
@@ -882,7 +916,7 @@ class TableauPanel extends ApplicationV2 {
             ${sel.length > 1 ? btn("group", "fa-solid fa-object-group", "Grouper") : ""}
             ${sel.some((d) => flagOf(d).group) ? btn("ungroup", "fa-solid fa-object-ungroup", "Dégrouper") : ""}
           </div>`
-        : `<p class="tableau__hint">Cliquez une image de la couche ${LAYERS[current].label} (ou tracez un cadre) pour agir dessus.</p>`}
+        : `<p class="tableau__hint">Cliquez une image ou un dessin de la couche ${LAYERS[current].label} pour agir dessus. Pour en sélectionner plusieurs : cadre avec l'outil Tuiles (images) ou Dessins (dessins).</p>`}
       </section>`;
   }
 
@@ -985,18 +1019,22 @@ class TableauPanel extends ApplicationV2 {
     const scene = canvas.scene;
     const sel = selection();
     const current = activeCouche();
-    const coucheTiles = () => scene.tiles.filter((t) => layerOf(t) === current);
+    const coucheTiles = () => [...scene.tiles, ...scene.drawings].filter((t) => layerOf(t) === current);
     switch (action) {
       case "help": this.tbView.help = !this.tbView.help; return this.render();
       case "show-couche": return updateMany(coucheTiles(), { hidden: false });
       case "hide-couche": return updateMany(coucheTiles(), { hidden: true });
       case "unlock-couche": return updateMany(coucheTiles().filter((t) => t.locked), { locked: false });
       case "clear-couche": {
-        const ids = coucheTiles().map((t) => t.id);
-        if (!ids.length) return;
+        const objects = coucheTiles();
+        if (!objects.length) return;
         const ok = await DialogV2().confirm({ window: { title: `Vider la couche ${LAYERS[current].label}` },
-          content: `<p>Retirer les ${ids.length} image(s) de la couche ${LAYERS[current].label} de « ${escapeHtml(scene.name)} » ? Les fichiers restent sur le serveur.</p>` });
-        if (ok) await scene.deleteEmbeddedDocuments("Tile", ids);
+          content: `<p>Retirer les ${objects.length} image(s) et dessin(s) de la couche ${LAYERS[current].label} de « ${escapeHtml(scene.name)} » ? Les fichiers des images restent sur le serveur.</p>` });
+        if (!ok) return;
+        for (const type of ["Tile", "Drawing"]) {
+          const ids = objects.filter((o) => o.documentName === type).map((o) => o.id);
+          if (ids.length) await scene.deleteEmbeddedDocuments(type, ids);
+        }
         return;
       }
       case "to-fond": case "to-joueurs": case "to-mj": return moveToLayer(sel, action.slice(3));
@@ -1163,6 +1201,11 @@ Hooks.on("dropCanvasData", onDropCanvasData);
 Hooks.on("refreshTile", applyTileCouche);
 Hooks.on("drawTile", applyTileCouche);
 Hooks.on("controlTile", onControlTile);
+Hooks.on("controlDrawing", onControlTile);
+Hooks.on("refreshDrawing", applyTileCouche);
+Hooks.on("drawDrawing", applyTileCouche);
+Hooks.on("preCreateDrawing", onPreCreateDrawing);
+Hooks.on("activateDrawingsLayer", () => applyCouche());
 Hooks.on("canvasReady", () => applyCouche());
 Hooks.on("activateTilesLayer", () => applyCouche());
 Hooks.on("activateTokenLayer", () => applyCouche());
