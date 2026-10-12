@@ -161,8 +161,8 @@ function tileData(scene, layer, g) {
   };
 }
 
-/** Pose une image sur la scène en cours, centrée sur (x, y) : calque MJ, cachée. */
-async function placeImage({ src, name, x, y, layer = "mj" }) {
+/** Pose une image sur la scène en cours, centrée sur (x, y), sur la couche active (cachée sur la couche MJ). */
+async function placeImage({ src, name, x, y, layer = activeCouche() }) {
   const scene = canvas.scene;
   if (!scene || !src) return;
   if (!game.user.isGM) return notify("Seul le MJ peut poser des images sur la scène.", "warn");
@@ -172,7 +172,7 @@ async function placeImage({ src, name, x, y, layer = "mj" }) {
   const [doc] = await scene.createEmbeddedDocuments("Tile", [tileData(scene, layer, g)]);
   // Les images sont des tuiles : outil Tuiles activé pour pouvoir les prendre, redimensionner, tourner.
   if (canvas.activeLayer !== canvas.tiles) canvas.tiles?.activate?.();
-  notify(`« ${g.name} » posée sur le calque ${LAYERS[layer].label}${layer === "mj" ? " (cachée)" : ""}.`);
+  notify(`« ${g.name} » posée sur la couche ${LAYERS[layer].label}${layer === "mj" ? " (cachée aux joueurs)" : ""}.`);
   return doc;
 }
 
@@ -185,14 +185,13 @@ async function moveToLayer(docs, layer) {
   for (const doc of items) {
     if (!byScene.has(doc.parent)) byScene.set(doc.parent, []);
     const update = { _id: doc.id, [`flags.${MODULE}.layer`]: layer, sort: sortFor(doc.parent, layer) };
-    if (layerOf(doc) === "fond") update.locked = false;  // sortie du Fond : de nouveau déplaçable
-    if (layer === "fond") Object.assign(update, { locked: true, hidden: false });  // un fond ne bouge pas par accident
+    if (layer === "fond") update.hidden = false;  // le Fond est protégé en n'étant pas la couche active
     if (layer === "joueurs") update.hidden = false;
     if (layer === "mj") update.hidden = true;     // entrer sur le calque MJ : caché par défaut
     byScene.get(doc.parent).push(update);
   }
   for (const [scene, updates] of byScene) await scene.updateEmbeddedDocuments("Tile", updates, { [MODULE]: { sync: true } });
-  notify(`${items.length} image(s) sur le calque ${LAYERS[layer].label}.`);
+  notify(`${items.length} image(s) envoyée(s) sur la couche ${LAYERS[layer].label}${layer === activeCouche() ? "" : ` (Maj+${LAYER_ORDER.indexOf(layer) + 1} pour y aller)`}.`);
 }
 
 /** Version 1.0 : les images étaient des jetons d'acteurs du module ; converties en tuiles (MJ actif). */
@@ -213,6 +212,16 @@ async function convertLegacyTokens() {
     count += tokens.length;
   }
   if (count) notify(`Tableau de jeu : ${count} image(s) de la version précédente converties en tuiles. Les acteurs « Tableau - Joueurs » et « Tableau - MJ » peuvent être supprimés.`);
+}
+
+/** 1.1 verrouillait les images envoyées sur le Fond : déverrouillées une fois (la couche active les protège). */
+async function unlockLegacyFond() {
+  if (!isActiveGM() || game.settings.get(MODULE, "migrated12")) return;
+  for (const scene of game.scenes) {
+    const tiles = scene.tiles.filter((t) => flagOf(t).layer === "fond" && t.locked);
+    if (tiles.length) await scene.updateEmbeddedDocuments("Tile", tiles.map((t) => ({ _id: t.id, locked: false })), { [MODULE]: { sync: true } });
+  }
+  await game.settings.set(MODULE, "migrated12", true);
 }
 
 /* ---------------------------------------------------------------------------------------------- */
@@ -372,7 +381,8 @@ function onGMPointerDown(event) {
     return;
   }
   if (active !== canvas.tokens) return;
-  const tile = (canvas.tiles?.placeables ?? []).some((t) => t.visible !== false && tileContains(t.document, p));
+  const tile = (canvas.tiles?.placeables ?? []).some((t) => t.visible !== false && layerOf(t.document) === activeCouche()
+    && tileContains(t.document, p));
   if (tile) canvas.tiles.activate();
 }
 
@@ -645,7 +655,152 @@ function onRenderHUD(hud, html) {
 /* Panneau « Tableau de jeu »                                                                      */
 /* ---------------------------------------------------------------------------------------------- */
 
+/* ---------------------------------------------------------------------------------------------- */
+/* Couche active (comme Roll20) : seules ses images se prennent                                    */
+/* ---------------------------------------------------------------------------------------------- */
+
+const COUCHE_COLORS = { fond: "#9aa3ad", joueurs: "#3fae5b", mj: "#d9534f" };
+
+function activeCouche() {
+  const value = game.settings.get(MODULE, "couche");
+  return LAYERS[value] ? value : "mj";
+}
+
+/** Change de couche : seules les images de la nouvelle couche réagissent, l'outil Tuiles est activé. */
+async function setCouche(layer, { activateTiles = true } = {}) {
+  if (!game.user.isGM || !LAYERS[layer]) return;
+  await game.settings.set(MODULE, "couche", layer);
+  applyCouche();
+  if (activateTiles && canvas?.ready && canvas.activeLayer !== canvas.tiles) canvas.tiles?.activate?.();
+}
+
+/** Interactivité des tuiles selon la couche active (MJ seulement), barre, liseré, panneau. */
+function applyCouche() {
+  if (!game.user.isGM) return;
+  for (const tile of canvas?.tiles?.placeables ?? []) applyTileCouche(tile);
+  for (const tile of [...(canvas?.tiles?.controlled ?? [])]) {
+    if (layerOf(tile.document) !== activeCouche()) tile.release();
+  }
+  renderCoucheBar();
+  refreshPanel();
+}
+
+function applyTileCouche(tile) {
+  if (!game.user.isGM || !tile?.document) return;
+  const inCouche = layerOf(tile.document) === activeCouche();
+  // Hors de la couche active : le clic passe à travers (eventMode de PIXI), comme dans Roll20.
+  if (!inCouche) tile.eventMode = "none";
+  else if (canvas.tiles?.active && tile.eventMode === "none") tile.eventMode = "static";
+}
+
+/** Sélection au cadre (ou par programme) d'une image d'une autre couche : relâchée aussitôt. */
+function onControlTile(tile, controlled) {
+  if (controlled && game.user.isGM && layerOf(tile.document) !== activeCouche()) tile.release();
+}
+
+/** Barre fixe en haut de la scène : couche active, changement de couche, panneau. */
+function renderCoucheBar() {
+  if (!game.user.isGM) return;
+  let bar = document.getElementById("tableau-couche-bar");
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = "tableau-couche-bar";
+    bar.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-couche], [data-open]");
+      if (!button) return;
+      event.preventDefault();
+      if (button.dataset.open) return TableauPanel.open();
+      setCouche(button.dataset.couche);
+    });
+    document.body.append(bar);
+  }
+  let frame = document.getElementById("tableau-couche-frame");
+  if (!frame) {
+    frame = document.createElement("div");
+    frame.id = "tableau-couche-frame";
+    document.body.append(frame);
+  }
+  const current = activeCouche();
+  const show = !!canvas?.ready && !!canvas.scene;
+  bar.hidden = !show;
+  frame.hidden = !show || !game.settings.get(MODULE, "frame");
+  frame.style.setProperty("--tableau-couche", COUCHE_COLORS[current]);
+  bar.style.setProperty("--tableau-couche", COUCHE_COLORS[current]);
+  bar.innerHTML = LAYER_ORDER.map((k, i) => `
+    <button type="button" data-couche="${k}" class="${k === current ? "active" : ""}" style="--c: ${COUCHE_COLORS[k]}"
+      data-tooltip="Couche ${LAYERS[k].label} : ${LAYERS[k].hint} (Maj+${i + 1})" aria-pressed="${k === current}">
+      <i class="${LAYERS[k].icon}"></i> ${LAYERS[k].label}
+    </button>`).join("") + `
+    <button type="button" data-open="1" class="tableau-bar__panel" data-tooltip="Panneau Tableau de jeu (Maj+B)" aria-label="Panneau Tableau de jeu">
+      <i class="fa-solid fa-chalkboard"></i>
+    </button>`;
+}
+
+/* Pastille au survol : couche de l'image sous le pointeur, cachée, verrouillée. */
+let hoverFrame = 0;
+let lastPointer = null;
+
+function onHoverMove(event) {
+  if (!game.user.isGM) return;
+  lastPointer = { x: event.clientX, y: event.clientY, target: event.target };
+  if (hoverFrame) return;
+  hoverFrame = requestAnimationFrame(updateHoverBadge);
+}
+
+function updateHoverBadge() {
+  hoverFrame = 0;
+  let badge = document.getElementById("tableau-hover-badge");
+  const hide = () => { if (badge) badge.hidden = true; };
+  if (!lastPointer || !canvas?.ready || lastPointer.target !== boardElement() || !game.settings.get(MODULE, "badge")) return hide();
+  if (canvas.activeLayer !== canvas.tiles && canvas.activeLayer !== canvas.tokens) return hide();
+  const p = canvas.canvasCoordinatesFromClient({ x: lastPointer.x, y: lastPointer.y });
+  if (canvas.tokens?.placeables?.some((t) => t.visible && t.bounds?.contains(p.x, p.y))) return hide();
+  const tile = (canvas.tiles?.placeables ?? [])
+    .filter((t) => t.visible !== false && tileContains(t.document, p))
+    .sort((a, b) => (b.document.elevation ?? 0) - (a.document.elevation ?? 0) || (b.document.sort ?? 0) - (a.document.sort ?? 0))[0];
+  if (!tile) return hide();
+  if (!badge) {
+    badge = document.createElement("div");
+    badge.id = "tableau-hover-badge";
+    document.body.append(badge);
+  }
+  const doc = tile.document;
+  const layer = layerOf(doc);
+  const other = layer !== activeCouche();
+  badge.style.setProperty("--c", COUCHE_COLORS[layer]);
+  badge.classList.toggle("is-other", other);
+  badge.innerHTML = `<i class="${LAYERS[layer].icon}"></i> ${LAYERS[layer].label}`
+    + (doc.hidden ? ' · <i class="fa-solid fa-eye-slash"></i> cachée' : "")
+    + (doc.locked ? ' · <i class="fa-solid fa-lock"></i>' : "")
+    + (flagOf(doc).group ? ' · <i class="fa-solid fa-object-group"></i>' : "")
+    + (other ? ` <span>(Maj+${LAYER_ORDER.indexOf(layer) + 1} pour la prendre)</span>` : "");
+  badge.style.left = `${lastPointer.x + 16}px`;
+  badge.style.top = `${lastPointer.y + 18}px`;
+  badge.hidden = false;
+}
+
+/* ---------------------------------------------------------------------------------------------- */
+/* Panneau « Tableau de jeu » : onglets Couche, Groupes, Scènes                                    */
+/* ---------------------------------------------------------------------------------------------- */
+
 const { ApplicationV2 } = foundry.applications.api;
+
+const HELP = `
+  <ul>
+    <li><strong>Couche active</strong> (barre en haut de la scène, Maj+1 / 2 / 3) : seules ses images se prennent. Une image déposée y arrive (cachée sur la couche MJ).</li>
+    <li><strong>Déposer</strong> : un fichier de Windows, une image d'une fiche ou d'un journal ouvert, une page image, un objet ; Maj + glisser un acteur pour son portrait.</li>
+    <li><strong>Image</strong> : clic pour la prendre, poignées pour la taille, Maj + molette pour la tourner, clic droit pour ses boutons (couche, verrou, en grand, groupe).</li>
+    <li><strong>Joueurs</strong> : ils déplacent les images de la couche Joueurs (un MJ doit être connecté) ; celles de la couche MJ montrées (œil) restent fixes pour eux.</li>
+  </ul>
+  <table class="tableau__keys">
+    <tr><td>Maj+1 / 2 / 3</td><td>Couche Fond / Joueurs / MJ</td></tr>
+    <tr><td>Maj+F / J / M</td><td>Envoyer la sélection vers Fond / Joueurs / MJ</td></tr>
+    <tr><td>Maj+H</td><td>Montrer / cacher</td></tr>
+    <tr><td>Maj+L</td><td>Verrouiller / déverrouiller</td></tr>
+    <tr><td>Maj+G</td><td>Grouper</td></tr>
+    <tr><td>Maj+V</td><td>Montrer en grand</td></tr>
+    <tr><td>Maj+B</td><td>Ce panneau</td></tr>
+  </table>`;
 
 class TableauPanel extends ApplicationV2 {
   static DEFAULT_OPTIONS = {
@@ -653,7 +808,7 @@ class TableauPanel extends ApplicationV2 {
     tag: "div",
     classes: ["tableau-de-jeu"],
     window: { title: "Tableau de jeu", icon: "fa-solid fa-chalkboard", resizable: true },
-    position: { width: 380, height: "auto", top: 80, left: 120 }
+    position: { width: 360, height: "auto", top: 80, left: 120 }
   };
 
   static open() {
@@ -664,7 +819,7 @@ class TableauPanel extends ApplicationV2 {
   constructor(options) {
     super(options);
     // « state » est réservé par ApplicationV2 : nom propre au module.
-    this.tbView = { newScene: "Tableau", prepared: "" };
+    this.tbView = { tab: "couche", help: false, newScene: "Tableau", prepared: "" };
   }
 
   async _renderHTML() {
@@ -675,14 +830,63 @@ class TableauPanel extends ApplicationV2 {
       div.innerHTML = "<p>Aucune scène affichée.</p>";
       return div;
     }
-    const counts = { fond: 0, joueurs: 0, mj: 0, mjVisible: 0, locked: 0 };
-    for (const doc of scene.tiles) {
-      const layer = layerOf(doc);
-      if (!layer) continue;
-      counts[layer] += 1;
-      if (layer === "mj" && !doc.hidden) counts.mjVisible += 1;
-      if (doc.locked) counts.locked += 1;
-    }
+    const v = this.tbView;
+    const tab = (key, icon, label) => `<a class="tableau__tab ${v.tab === key ? "active" : ""}" data-tab="${key}"><i class="${icon}"></i> ${label}</a>`;
+    div.innerHTML = `
+      <nav class="tableau__tabs">
+        ${tab("couche", "fa-solid fa-layer-group", "Couche")}
+        ${tab("groupes", "fa-solid fa-object-group", "Groupes")}
+        ${tab("scenes", "fa-solid fa-map", "Scènes")}
+        <a class="tableau__help-toggle ${v.help ? "active" : ""}" data-do="help" data-tooltip="Aide : gestes et raccourcis"><i class="fa-solid fa-circle-question"></i></a>
+      </nav>
+      ${v.help ? `<section class="tableau__help">${HELP}</section>` : ""}
+      ${v.tab === "couche" ? this.coucheTab(scene) : v.tab === "groupes" ? this.groupsTab(scene) : this.scenesTab(scene)}`;
+    return div;
+  }
+
+  coucheTab(scene) {
+    const current = activeCouche();
+    const tiles = scene.tiles.filter((t) => layerOf(t) === current);
+    const visible = tiles.filter((t) => !t.hidden).length;
+    const locked = tiles.filter((t) => t.locked).length;
+    const sel = selection();
+    const btn = (action, icon, label, attrs = "") => `<button type="button" data-do="${action}" ${attrs}><i class="${icon}"></i> ${label}</button>`;
+    const others = LAYER_ORDER.filter((k) => k !== current);
+    return `
+      <section>
+        <div class="tableau__segmented">
+          ${LAYER_ORDER.map((k) => `<button type="button" data-couche="${k}" class="${k === current ? "active" : ""}" style="--c: ${COUCHE_COLORS[k]}"><i class="${LAYERS[k].icon}"></i> ${LAYERS[k].label}</button>`).join("")}
+        </div>
+        <p class="tableau__status" style="--c: ${COUCHE_COLORS[current]}">
+          <strong>${LAYERS[current].label}</strong> · ${tiles.length} image${tiles.length > 1 ? "s" : ""}
+          ${current === "mj" ? ` · ${visible} visible${visible > 1 ? "s" : ""} des joueurs` : ""}${locked ? ` · ${locked} verrouillée${locked > 1 ? "s" : ""}` : ""}
+        </p>
+        <div class="tableau__row">
+          ${current === "mj" ? btn("show-couche", "fa-solid fa-eye", "Tout montrer") + btn("hide-couche", "fa-solid fa-eye-slash", "Tout cacher") : ""}
+          ${locked ? btn("unlock-couche", "fa-solid fa-lock-open", "Tout déverrouiller") : ""}
+          ${btn("clear-couche", "fa-solid fa-broom", "Vider la couche", tiles.length ? "" : "disabled")}
+        </div>
+      </section>
+      <section>
+        <h3>Sélection${sel.length ? ` : ${sel.length}` : ""}</h3>
+        ${sel.length ? `
+          <div class="tableau__row">
+            ${others.map((k) => btn(`to-${k}`, "fa-solid fa-arrow-right", LAYERS[k].label)).join("")}
+          </div>
+          <div class="tableau__row">
+            ${btn("lock", sel.every((d) => d.locked) ? "fa-solid fa-lock-open" : "fa-solid fa-lock", sel.every((d) => d.locked) ? "Déverrouiller" : "Verrouiller")}
+            ${current !== "fond" || sel.some((d) => d.documentName !== "Tile") ? btn("hide", "fa-solid fa-eye-slash", sel.every((d) => d.hidden) ? "Montrer" : "Cacher") : ""}
+            ${sel.length === 1 && sel[0].texture?.src ? btn("show-large", "fa-solid fa-expand", "En grand") : ""}
+          </div>
+          <div class="tableau__row">
+            ${sel.length > 1 ? btn("group", "fa-solid fa-object-group", "Grouper") : ""}
+            ${sel.some((d) => flagOf(d).group) ? btn("ungroup", "fa-solid fa-object-ungroup", "Dégrouper") : ""}
+          </div>`
+        : `<p class="tableau__hint">Cliquez une image de la couche ${LAYERS[current].label} (ou tracez un cadre) pour agir dessus.</p>`}
+      </section>`;
+  }
+
+  groupsTab(scene) {
     const names = scene.flags?.[MODULE]?.groups ?? {};
     const groups = new Map();
     for (const type of GROUPABLE) for (const d of scene.getEmbeddedCollection(type)) {
@@ -690,80 +894,59 @@ class TableauPanel extends ApplicationV2 {
       if (g) groups.set(g, (groups.get(g) ?? 0) + 1);
     }
     const sel = selection();
-    const scenes = game.scenes.filter((s) => s.id !== scene.id).sort((a, b) => a.name.localeCompare(b.name));
-    const active = game.scenes.active;
-    const btn = (action, icon, label, extra = "") =>
-      `<button type="button" data-do="${action}" ${extra}><i class="${icon}"></i> ${label}</button>`;
-    div.innerHTML = `
+    const btn = (action, icon, label, attrs = "") => `<button type="button" data-do="${action}" ${attrs}><i class="${icon}"></i> ${label}</button>`;
+    return `
       <section>
-        <h3>Calques de « ${escapeHtml(scene.name)} »</h3>
-        <ul class="tableau__layers">
-          <li><i class="${LAYERS.fond.icon}"></i> Fond : ${counts.fond}</li>
-          <li><i class="${LAYERS.joueurs.icon}"></i> Joueurs : ${counts.joueurs}</li>
-          <li><i class="${LAYERS.mj.icon}"></i> MJ : ${counts.mj}${counts.mjVisible ? ` (${counts.mjVisible} visible${counts.mjVisible > 1 ? "s" : ""})` : ""}</li>
-        </ul>
-        <p class="tableau__hint">Déposez une image sur la scène : elle arrive sur le calque MJ, cachée. Les images sont des tuiles : un clic dessus les prend (outil Tuiles activé tout seul), poignées pour les redimensionner, Maj + molette pour les tourner, clic droit pour les changer de calque, les verrouiller, les montrer en grand ou les grouper.</p>
         <div class="tableau__row">
-          ${btn("show-mj", "fa-solid fa-eye", "Montrer le calque MJ")}
-          ${btn("hide-mj", "fa-solid fa-eye-slash", "Cacher le calque MJ")}
-        </div>
-        ${counts.locked ? `<div class="tableau__row">${btn("unlock-all", "fa-solid fa-lock-open", `Déverrouiller les ${counts.locked} image(s) verrouillée(s)`)}</div>` : ""}
-        <div class="tableau__row">
-          ${btn("clear-joueurs", "fa-solid fa-broom", "Nettoyer Joueurs")}
-          ${btn("clear-mj", "fa-solid fa-broom", "Nettoyer MJ")}
-        </div>
-      </section>
-      <section>
-        <h3>Sélection (${sel.length})</h3>
-        <div class="tableau__row">
-          ${LAYER_ORDER.map((k) => btn(`to-${k}`, LAYERS[k].icon, LAYERS[k].label, sel.length ? "" : "disabled")).join("")}
-        </div>
-        <div class="tableau__row">
-          ${btn("lock", "fa-solid fa-lock", "Verrou", sel.length ? "" : "disabled")}
-          ${btn("hide", "fa-solid fa-eye-slash", "Visibilité", sel.length ? "" : "disabled")}
-          ${btn("show-large", "fa-solid fa-expand", "En grand", sel.length === 1 ? "" : "disabled")}
-        </div>
-      </section>
-      <section>
-        <h3>Groupes</h3>
-        <div class="tableau__row">
-          ${btn("group", "fa-solid fa-object-group", "Grouper la sélection", sel.length > 1 ? "" : "disabled")}
+          ${btn("group", "fa-solid fa-object-group", `Grouper la sélection${sel.length ? ` (${sel.length})` : ""}`, sel.length > 1 ? "" : "disabled")}
           ${btn("ungroup", "fa-solid fa-object-ungroup", "Dégrouper", sel.some((d) => flagOf(d).group) ? "" : "disabled")}
         </div>
         ${groups.size ? `<ul class="tableau__groups">${[...groups].map(([id, n]) => `
           <li>
             <span>${escapeHtml(names[id] ?? "Groupe")} <small>(${n})</small></span>
             <span class="tableau__icons">
-              <a data-do="g-add" data-group="${id}" data-tooltip="Ajouter la sélection (autre calque compris)"><i class="fa-solid fa-plus"></i></a>
+              <a data-do="g-add" data-group="${id}" data-tooltip="Ajouter la sélection (autre couche ou dessins compris)"><i class="fa-solid fa-plus"></i></a>
               <a data-do="g-lock" data-group="${id}" data-tooltip="Verrouiller / déverrouiller"><i class="fa-solid fa-lock"></i></a>
               <a data-do="g-hide" data-group="${id}" data-tooltip="Montrer / cacher"><i class="fa-solid fa-eye-slash"></i></a>
               <a data-do="g-rename" data-group="${id}" data-tooltip="Renommer"><i class="fa-solid fa-pen"></i></a>
               <a data-do="g-dissolve" data-group="${id}" data-tooltip="Défaire le groupe"><i class="fa-solid fa-xmark"></i></a>
             </span>
-          </li>`).join("")}</ul>` : `<p class="tableau__hint">Sélectionnez des images, dessins ou formes puis « Grouper ». Pour mêler plusieurs calques : groupez sur l'un, puis sélectionnez sur l'autre et « + » sur le groupe.</p>`}
+          </li>`).join("")}</ul>`
+        : `<p class="tableau__hint">Aucun groupe. Sélectionnez au moins deux éléments puis « Grouper » ; ils bougeront, se verrouilleront et se montreront ensemble.</p>`}
+      </section>`;
+  }
+
+  scenesTab(scene) {
+    const v = this.tbView;
+    const active = game.scenes.active;
+    const scenes = game.scenes.filter((s) => s.id !== scene.id).sort((a, b) => a.name.localeCompare(b.name));
+    const btn = (action, icon, label, attrs = "") => `<button type="button" data-do="${action}" ${attrs}><i class="${icon}"></i> ${label}</button>`;
+    return `
+      <section>
+        <p class="tableau__status">Vous : <strong>${escapeHtml(scene.name)}</strong> · joueurs : <strong>${escapeHtml(active?.name ?? "aucune")}</strong></p>
+        ${active?.id === scene.id ? "" : `<div class="tableau__row">${btn("activate-here", "fa-solid fa-bullseye", "Amener le groupe ici")}</div>`}
       </section>
       <section>
-        <h3>Scènes</h3>
-        <div class="tableau__row">
-          <input type="text" name="newScene" value="${escapeHtml(this.tbView.newScene)}" aria-label="Nom de la scène">
-          ${btn("new-scene", "fa-solid fa-chalkboard", "Nouvelle scène tableau")}
-        </div>
-        <p class="tableau__hint">Scène en cours pour les joueurs : <strong>${escapeHtml(active?.name ?? "aucune")}</strong>${active?.id === scene.id ? " (celle-ci)" : ""}.</p>
+        <h3>Scène suivante</h3>
         <div class="tableau__row">
           <select name="prepared" aria-label="Scène suivante">
-            <option value="">Scène suivante…</option>
-            ${scenes.map((s) => `<option value="${s.id}" ${s.id === this.tbView.prepared ? "selected" : ""}>${escapeHtml(s.name)}${s.active ? " (active)" : ""}</option>`).join("")}
+            <option value="">Choisir…</option>
+            ${scenes.map((s) => `<option value="${s.id}" ${s.id === v.prepared ? "selected" : ""}>${escapeHtml(s.name)}${s.active ? " (joueurs)" : ""}</option>`).join("")}
           </select>
         </div>
         <div class="tableau__row">
-          ${btn("prepare", "fa-solid fa-hourglass-half", "Préparer")}
-          ${btn("switch", "fa-solid fa-person-walking-arrow-right", "Basculer le groupe")}
+          ${btn("prepare", "fa-solid fa-hourglass-half", "Préparer", v.prepared ? "" : "disabled")}
+          ${btn("switch", "fa-solid fa-person-walking-arrow-right", "Basculer le groupe", v.prepared ? "" : "disabled")}
         </div>
+        <p class="tableau__hint">Préparer : vous y allez seul, elle se précharge chez les joueurs. Basculer : tout le monde y passe.</p>
+      </section>
+      <section>
+        <h3>Nouvelle scène tableau</h3>
         <div class="tableau__row">
-          ${active?.id === scene.id ? "" : btn("activate-here", "fa-solid fa-bullseye", "Amener le groupe ici")}
+          <input type="text" name="newScene" value="${escapeHtml(v.newScene)}" aria-label="Nom de la scène">
+          ${btn("new-scene", "fa-solid fa-plus", "Créer")}
         </div>
       </section>`;
-    return div;
   }
 
   _replaceHTML(result, content) {
@@ -771,34 +954,48 @@ class TableauPanel extends ApplicationV2 {
   }
 
   _onRender() {
+    const run = (fn) => Promise.resolve(fn()).catch((err) => {
+      console.error(`${MODULE} |`, err);
+      notify(err.message ?? String(err), "error");
+    });
     for (const el of this.element.querySelectorAll("[data-do]")) {
       el.addEventListener("click", (event) => {
         event.preventDefault();
-        this.run(el.dataset.do, el.dataset.group).catch((err) => {
-          console.error(`${MODULE} |`, err);
-          notify(err.message ?? String(err), "error");
-        });
+        run(() => this.run(el.dataset.do, el.dataset.group));
+      });
+    }
+    for (const el of this.element.querySelectorAll("[data-tab]")) {
+      el.addEventListener("click", (event) => {
+        event.preventDefault();
+        this.tbView.tab = el.dataset.tab;
+        this.render();
+      });
+    }
+    for (const el of this.element.querySelectorAll("[data-couche]")) {
+      el.addEventListener("click", (event) => {
+        event.preventDefault();
+        run(() => setCouche(el.dataset.couche));
       });
     }
     this.element.querySelector('[name="newScene"]')?.addEventListener("input", (e) => { this.tbView.newScene = e.target.value; });
-    this.element.querySelector('[name="prepared"]')?.addEventListener("change", (e) => { this.tbView.prepared = e.target.value; });
+    this.element.querySelector('[name="prepared"]')?.addEventListener("change", (e) => { this.tbView.prepared = e.target.value; this.render(); });
   }
 
   async run(action, group) {
     const scene = canvas.scene;
     const sel = selection();
-    const boardTiles = (kind) => scene.tiles.filter((t) => layerOf(t) === kind && flagOf(t).layer);
+    const current = activeCouche();
+    const coucheTiles = () => scene.tiles.filter((t) => layerOf(t) === current);
     switch (action) {
-      case "unlock-all": return updateMany(scene.tiles.filter((t) => t.locked), { locked: false });
-      case "show-mj": return updateMany(boardTiles("mj"), { hidden: false });
-      case "hide-mj": return updateMany(boardTiles("mj"), { hidden: true });
-      case "clear-joueurs":
-      case "clear-mj": {
-        const kind = action === "clear-mj" ? "mj" : "joueurs";
-        const ids = boardTiles(kind).map((t) => t.id);
-        if (!ids.length) return notify(`Calque ${LAYERS[kind].label} déjà vide.`);
-        const ok = await DialogV2().confirm({ window: { title: `Nettoyer le calque ${LAYERS[kind].label}` },
-          content: `<p>Retirer les ${ids.length} image(s) du calque ${LAYERS[kind].label} de « ${escapeHtml(scene.name)} » ? Les fichiers restent sur le serveur.</p>` });
+      case "help": this.tbView.help = !this.tbView.help; return this.render();
+      case "show-couche": return updateMany(coucheTiles(), { hidden: false });
+      case "hide-couche": return updateMany(coucheTiles(), { hidden: true });
+      case "unlock-couche": return updateMany(coucheTiles().filter((t) => t.locked), { locked: false });
+      case "clear-couche": {
+        const ids = coucheTiles().map((t) => t.id);
+        if (!ids.length) return;
+        const ok = await DialogV2().confirm({ window: { title: `Vider la couche ${LAYERS[current].label}` },
+          content: `<p>Retirer les ${ids.length} image(s) de la couche ${LAYERS[current].label} de « ${escapeHtml(scene.name)} » ? Les fichiers restent sur le serveur.</p>` });
         if (ok) await scene.deleteEmbeddedDocuments("Tile", ids);
         return;
       }
@@ -814,10 +1011,10 @@ class TableauPanel extends ApplicationV2 {
       case "g-lock": return toggleLock(groupMembers(scene, group));
       case "g-hide": return toggleHidden(groupMembers(scene, group));
       case "g-rename": {
-        const current = scene.flags?.[MODULE]?.groups?.[group] ?? "Groupe";
+        const name0 = scene.flags?.[MODULE]?.groups?.[group] ?? "Groupe";
         const name = await DialogV2().prompt({
           window: { title: "Renommer le groupe" },
-          content: `<input type="text" name="name" value="${escapeHtml(current)}" autofocus>`,
+          content: `<input type="text" name="name" value="${escapeHtml(name0)}" autofocus>`,
           ok: { callback: (event, button) => button.form.elements.name.value }
         });
         if (name?.trim()) await scene.update({ [`flags.${MODULE}.groups.${group}`]: name.trim() });
@@ -833,7 +1030,7 @@ class TableauPanel extends ApplicationV2 {
         return notify(`« ${next.name} » préparée : vous seul la voyez, elle est préchargée chez les joueurs.`);
       }
       case "switch": {
-        const next = game.scenes.get(this.tbView.prepared) ?? (canvas.scene.active ? null : canvas.scene);
+        const next = game.scenes.get(this.tbView.prepared);
         if (!next) return notify("Choisissez la scène suivante.", "warn");
         await next.activate();
         this.tbView.prepared = "";
@@ -906,6 +1103,16 @@ function keybinding(name, title, key, onDown) {
 }
 
 Hooks.once("init", () => {
+  game.settings.register(MODULE, "couche", { scope: "client", config: false, type: String, default: "mj",
+    onChange: () => applyCouche() });
+  game.settings.register(MODULE, "frame", { name: "Liseré de la couche active", hint: "Fin cadre coloré autour de la scène (gris Fond, vert Joueurs, rouge MJ).",
+    scope: "client", config: true, type: Boolean, default: true, onChange: () => renderCoucheBar() });
+  game.settings.register(MODULE, "badge", { name: "Pastille au survol des images", hint: "Couche, visibilité et verrou de l'image sous le pointeur.",
+    scope: "client", config: true, type: Boolean, default: true });
+  game.settings.register(MODULE, "migrated12", { scope: "world", config: false, type: Boolean, default: false });
+  keybinding("couche-fond", "Couche active : Fond", "Digit1", () => setCouche("fond"));
+  keybinding("couche-joueurs", "Couche active : Joueurs", "Digit2", () => setCouche("joueurs"));
+  keybinding("couche-mj", "Couche active : MJ", "Digit3", () => setCouche("mj"));
   keybinding("panel", "Ouvrir le panneau Tableau de jeu", "KeyB", () => TableauPanel.open());
   keybinding("to-fond", "Sélection vers le calque Fond", "KeyF", () => moveToLayer(selection(), "fond"));
   keybinding("to-joueurs", "Sélection vers le calque Joueurs", "KeyJ", () => moveToLayer(selection(), "joueurs"));
@@ -944,12 +1151,21 @@ Hooks.once("ready", () => {
   window.addEventListener("pointerdown", onPlayerPointerDown, true);
   window.addEventListener("pointerdown", onGMPointerDown, true);
   game.socket.on(SOCKET, onSocket);
+  window.addEventListener("pointermove", onHoverMove, true);
   convertLegacyTokens().catch((err) => console.error(`${MODULE} | conversion des jetons`, err));
+  unlockLegacyFond().catch((err) => console.error(`${MODULE} | déverrouillage du Fond`, err));
+  renderCoucheBar();
   const module = game.modules.get(MODULE);
   if (module) module.api = { open: () => TableauPanel.open(), placeImage, moveToLayer, toggleLock, toggleHidden, groupSelection, ungroup, createBoardScene };
 });
 
 Hooks.on("dropCanvasData", onDropCanvasData);
+Hooks.on("refreshTile", applyTileCouche);
+Hooks.on("drawTile", applyTileCouche);
+Hooks.on("controlTile", onControlTile);
+Hooks.on("canvasReady", () => applyCouche());
+Hooks.on("activateTilesLayer", () => applyCouche());
+Hooks.on("activateTokenLayer", () => applyCouche());
 Hooks.on("renderTileHUD", onRenderHUD);
 Hooks.on("renderDrawingHUD", onRenderHUD);
 

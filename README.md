@@ -8,39 +8,43 @@ Installation : Modules complémentaires > Installer un module > manifeste :
 
 ## Ce que fait le module (pour le MJ)
 
-- **Glisser-déposer d'images sur la scène**, depuis :
-  - une page image d'un journal (depuis le sommaire du journal) ou une image dans le texte d'un journal ;
+- **Couche active, comme dans Roll20** : barre en haut de la scène (Fond / Joueurs / MJ, Maj+1 / 2 / 3) et liseré de couleur autour de la scène (gris, vert, rouge). Seules les images de la couche active se prennent ; les autres laissent passer le clic. Au survol, une pastille indique la couche d'une image, si elle est cachée, verrouillée ou groupée.
+- **Glisser-déposer d'images sur la scène**, sur la couche active (cachée aux joueurs si c'est la couche MJ), depuis :
+  - un fichier de l'ordinateur (plusieurs à la fois ; envoyés dans `worlds/<monde>/tableau/`) ;
   - toute image d'une fenêtre ouverte : portrait d'une fiche de personnage ou de PNJ, image d'une page de journal, image dans le texte d'un journal (glisser l'image elle-même, pas la fenêtre) ;
-  - un acteur de la barre latérale avec **Maj** enfoncée : son portrait (sans Maj, c'est un jeton, comme d'habitude) ;
-  - un objet (glisser l'objet : son image est posée) ;
-  - un fichier de l'ordinateur (envoyé dans `worlds/<monde>/tableau/`).
-  L'image arrive **sur le calque MJ, cachée**, à l'endroit du dépôt.
-- **Trois calques**, tous faits de tuiles (images libres : poignées de redimensionnement, Maj + molette pour tourner, pas de règle de mouvement) :
-  - **Fond** : sous les autres images, verrouillée en y entrant ;
+  - une page image depuis le sommaire d'un journal, un objet, ou un acteur de la barre latérale avec **Maj** (son portrait ; sans Maj, c'est un jeton, comme d'habitude).
+- **Trois couches**, toutes faites de tuiles (poignées de redimensionnement, Maj + molette pour tourner, pas de règle de mouvement) :
+  - **Fond** : sous les autres images ;
   - **Joueurs** : visible, déplaçable par les joueurs (un simple glisser, même jeu en pause) ;
   - **MJ** : invisible des joueurs, ou visible sans pouvoir être déplacée (œil).
-- Les images sont des tuiles : un clic sur une image, depuis l'outil Jetons, passe tout seul sur l'outil **Tuiles** et la prend ; un clic sur un jeton revient aux Jetons. Une image verrouillée ne se prend plus : « Déverrouiller » dans le panneau.
-- **Clic droit sur une image** : changer de calque, montrer en grand aux joueurs, verrouiller, grouper.
-- **Verrou** sur les images, tuiles et dessins : plus rien ne bouge par accident, même pour le MJ.
-- **Groupes** d'images, de dessins et de formes : ils bougent ensemble, se verrouillent, se montrent et se cachent ensemble. Pour mêler des calques : grouper sur un calque, puis sélectionner sur l'autre et « + » sur le groupe dans le panneau.
-- **Panneau « Tableau de jeu »** (outil dans les contrôles des jetons, ou Maj+B) : compte des images par calque, montrer ou cacher tout le calque MJ, nettoyer le calque Joueurs ou MJ, actions sur la sélection, groupes, nouvelle scène tableau (sans grille ni brouillard), préparer la scène suivante (préchargée chez les joueurs, vue du MJ seul) puis y basculer le groupe.
+- **Clic droit sur une image** : l'envoyer sur une autre couche, la montrer en grand aux joueurs, la verrouiller, la grouper.
+- **Verrou** sur les images et dessins : plus rien ne bouge par accident, même pour le MJ.
+- **Groupes** d'images, de dessins et de formes : ils bougent, se verrouillent, se montrent et se cachent ensemble. Pour mêler des couches : grouper sur une couche, passer sur l'autre, sélectionner et « + » sur le groupe.
+- **Panneau « Tableau de jeu »** (Maj+B, bouton de la barre) en trois onglets :
+  - **Couche** : couche active et son contenu, tout montrer / cacher, tout déverrouiller, vider la couche, actions sur la sélection ;
+  - **Groupes** : liste, ajout, verrou, visibilité, renommage ;
+  - **Scènes** : où vous êtes et où sont les joueurs, préparer la scène suivante (préchargée chez eux, vue de vous seul) puis y basculer le groupe, nouvelle scène tableau (sans grille ni brouillard).
+  - Bouton **?** : gestes et raccourcis.
 
 ## Raccourcis (modifiables dans Configurer les contrôles)
 
 | Raccourci | Action |
 |---|---|
-| Maj+B | Panneau Tableau de jeu |
-| Maj+F / Maj+J / Maj+M | Sélection vers Fond / Joueurs / MJ |
-| Maj+H | Montrer / cacher (calque MJ, tuiles, dessins) |
+| Maj+1 / Maj+2 / Maj+3 | Couche active : Fond / Joueurs / MJ |
+| Maj+F / Maj+J / Maj+M | Envoyer la sélection vers Fond / Joueurs / MJ |
+| Maj+H | Montrer / cacher |
 | Maj+L | Verrouiller / déverrouiller |
 | Maj+G | Grouper la sélection |
 | Maj+V | Montrer en grand l'image sélectionnée |
+| Maj+B | Panneau Tableau de jeu |
+
+Réglages (Paramètres du jeu > Tableau de jeu) : liseré de la couche active, pastille au survol.
 
 ## Fonctionnement
 
 Foundry ne laisse que le MJ modifier une tuile. Pour le calque Joueurs, le module gère le glisser chez le joueur (aperçu immédiat) et demande le déplacement au MJ connecté par le canal du module ; le MJ vérifie que l'image est bien sur le calque Joueurs, visible et non verrouillée, puis l'applique (le groupe suit). Un MJ doit donc être en ligne.
 
-La version 1.0 posait des jetons rattachés à deux acteurs « Tableau - Joueurs » et « Tableau - MJ » : au premier lancement de la 1.1, le MJ les convertit en tuiles dans toutes les scènes. Ces deux acteurs (dossier d'acteurs « Tableau de jeu ») peuvent ensuite être supprimés.
+La version 1.1 verrouillait les images envoyées sur le Fond : la 1.2 les déverrouille une fois (la couche active suffit à les protéger). La version 1.0 posait des jetons rattachés à deux acteurs « Tableau - Joueurs » et « Tableau - MJ » : au premier lancement de la 1.1, le MJ les convertit en tuiles dans toutes les scènes. Ces deux acteurs (dossier d'acteurs « Tableau de jeu ») peuvent ensuite être supprimés.
 
 ## Limites connues
 
