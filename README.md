@@ -18,6 +18,7 @@ Installation : Modules complémentaires > Installer un module > manifeste :
   - **Joueurs** : visible, déplaçable par les joueurs (un simple glisser, même jeu en pause) ;
   - **MJ** : invisible des joueurs, ou visible sans pouvoir être déplacée (œil).
   - Ordre d'affichage : Fond sous Joueurs, Joueurs sous MJ, images et dessins confondus ; toutes les couches restent sous les jetons.
+  - Régions (cases de terrain) : leurs hachures s'affichent avec la couche Fond, au-dessus de ses images et dessins, sous les couches Joueurs et MJ et sous les jetons.
 - **Dessins et formes** (outil Dessins de Foundry : main levée, rectangle, ellipse, polygone, texte) rangés dans les mêmes couches : un dessin tracé arrive sur la couche active (caché sur la couche MJ). Ensuite, un clic sur un dessin de la couche active le prend, quel que soit l'outil sélectionné (Tuiles, Jetons ou Dessins en mode sélection) : le module bascule de lui-même sur le bon outil. Un dessin passe au-dessus des images pour le clic. Les dessins faits avant la 1.3 sont sur la couche Joueurs s'ils sont visibles, MJ s'ils sont cachés (Maj+M / Maj+F pour les ranger).
 - **Clic droit sur une image ou un dessin** : l'envoyer sur une autre couche, la montrer en grand aux joueurs, la verrouiller, la grouper.
 - **Verrou** sur les images et dessins : plus rien ne bouge par accident, même pour le MJ.

@@ -766,6 +766,34 @@ function applyCoucheOrder(object) {
   if (canvas?.primary) canvas.primary.sortDirty = true;
 }
 
+/**
+ * Régions (cases de terrain) : leur surlignage (hachures colorées) est dessiné par Foundry dans un calque
+ * d'interface, au-dessus de tout le reste. Le module le range avec la couche Fond : au-dessus des images et
+ * dessins du Fond, sous ceux des couches Joueurs et MJ, et sous les jetons. Rendu local, chez chaque client ;
+ * les régions, leurs comportements et leur visibilité ne changent pas. Remis à sa place avant chaque
+ * redessin de la scène (Foundry le recrée dans son calque).
+ */
+const REGION_SORT = -70;
+function sinkRegionHighlights() {
+  const layer = canvas?.regions;
+  const highlights = layer?._highlights;
+  const primary = canvas?.primary;
+  if (!highlights || highlights.destroyed || !primary) return;
+  const SORT = (foundry.canvas?.groups?.PrimaryCanvasGroup ?? CONFIG.Canvas.groups.primary.groupClass).SORT_LAYERS;
+  highlights.elevation = canvas.level?.elevation?.base ?? 0;
+  highlights.sortLayer = (SORT?.TILES ?? 500) + REGION_SORT;
+  highlights.sort = 0;
+  if (highlights.parent !== primary) primary.addChild(highlights);
+  primary.sortDirty = true;
+}
+
+function restoreRegionHighlights() {
+  const layer = canvas?.regions;
+  const highlights = layer?._highlights;
+  if (!highlights || highlights.destroyed || highlights.parent === layer) return;
+  highlights.parent?.removeChild(highlights);
+}
+
 function applyTileCouche(tile) {
   applyCoucheOrder(tile);
   if (!game.user.isGM || !tile?.document) return;
@@ -1564,7 +1592,13 @@ Hooks.on("refreshDrawing", applyTileCouche);
 Hooks.on("drawDrawing", applyTileCouche);
 Hooks.on("preCreateDrawing", onPreCreateDrawing);
 Hooks.on("activateDrawingsLayer", () => applyCouche());
-Hooks.on("canvasReady", () => applyCouche());
+Hooks.on("canvasReady", () => {
+  applyCouche();
+  try { sinkRegionHighlights(); } catch (err) { console.error(`${MODULE} | régions`, err); }
+});
+Hooks.on("canvasTearDown", () => {
+  try { restoreRegionHighlights(); } catch (err) { console.error(`${MODULE} | régions`, err); }
+});
 Hooks.on("activateTilesLayer", () => applyCouche());
 Hooks.on("activateTokenLayer", () => applyCouche());
 Hooks.on("renderTileHUD", onRenderHUD);
