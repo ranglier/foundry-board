@@ -115,7 +115,7 @@
 
 /* Sous la liste des scènes (colonne de gauche de Foundry). La liste prend d'ordinaire toute la hauteur de la
    colonne et, repliée, ne fait que masquer les scènes inactives (visibility) : tant que la barre est là, la
-   liste se limite aux scènes affichées et la barre suit leur nombre. Dépliée et trop longue, la liste défile. */
+   liste se limite aux scènes affichées et la barre suit leur nombre. */
 #tableau-couche-bar.tableau-bar--scenes {
   align-self: flex-start;
   margin-top: 6px;
@@ -130,9 +130,14 @@
   display: none;
 }
 
+/* Dépliée : Foundry donne aux scènes inactives une hauteur nulle qui s'étire (flex 1, height 0, marge basse
+   pour la barre de raccourcis) et les fait passer en colonnes (flex-wrap) : ici, toute leur hauteur, en une
+   seule colonne. */
 :has(> #tableau-couche-bar.tableau-bar--scenes:not([hidden])) > #scene-navigation.expanded > #scene-navigation-inactive {
-  min-height: 0;
-  overflow-y: auto;
+  flex: 0 0 auto;
+  height: auto;
+  padding-bottom: 0;
+  flex-wrap: nowrap;
 }
 
 /* Combat Tracker Dock (« masquer les interfaces en conflit ») cache tout ce qui est dans #ui-top pendant un
