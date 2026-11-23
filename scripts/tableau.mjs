@@ -338,6 +338,8 @@ function onPreUpdate(doc, change, options) {
 }
 
 function onUpdate(doc, change, options) {
+  // Changement de couche : l'ordre d'affichage suit, chez tous les clients.
+  if (foundry.utils.hasProperty(change, `flags.${MODULE}.layer`)) applyCoucheOrder(doc.object);
   const info = options[MODULE];
   if (!info || info.sync || !isActiveGM()) return;
   const group = flagOf(doc).group;
@@ -368,12 +370,13 @@ function tileContains(doc, p) {
   return Math.abs(lx) <= w / 2 && Math.abs(ly) <= h / 2;
 }
 
-/** Images et dessins de la scène affichée, du plus haut au plus bas (un dessin passe au-dessus d'une image). */
+/** Images et dessins de la scène affichée, du plus haut au plus bas, dans l'ordre d'affichage (couche, puis dessin sur image). */
 function boardObjectsAt(p, filter = () => true) {
   const objects = [...(canvas.drawings?.placeables ?? []), ...(canvas.tiles?.placeables ?? [])];
   return objects
     .filter((o) => o.visible !== false && o.document && filter(o.document) && tileContains(o.document, p))
     .sort((a, b) => (b.document.elevation ?? 0) - (a.document.elevation ?? 0)
+      || (coucheSortLayer(b.document) ?? 0) - (coucheSortLayer(a.document) ?? 0)
       || (b.document.documentName === "Drawing") - (a.document.documentName === "Drawing")
       || (b.document.sort ?? 0) - (a.document.sort ?? 0));
 }
@@ -736,7 +739,35 @@ function applyCouche() {
   refreshPanel();
 }
 
+/**
+ * Ordre d'affichage des couches : Fond sous Joueurs, Joueurs sous MJ, images et dessins confondus, le tout sous
+ * les jetons. Foundry range les objets par élévation, puis par « couche de tri » (tuiles 500, dessins 600,
+ * jetons 700), puis par ordre : un dessin passait donc toujours au-dessus d'une image, même d'une couche plus
+ * haute. Le module donne à chaque image et dessin une couche de tri selon sa couche du tableau (affichage local,
+ * chez chaque client ; les données et l'élévation ne changent pas). Dans une couche, un dessin reste au-dessus
+ * des images.
+ */
+const COUCHE_SORT = { fond: -100, joueurs: -40, mj: 20 };
+function coucheSortLayer(doc) {
+  const layer = flagOf(doc).layer;
+  if (!LAYERS[layer]) return null;
+  const SORT = (foundry.canvas?.groups?.PrimaryCanvasGroup ?? CONFIG.Canvas.groups.primary.groupClass).SORT_LAYERS;
+  return (SORT?.TILES ?? 500) + COUCHE_SORT[layer] + (doc.documentName === "Drawing" ? 10 : 0);
+}
+
+function applyCoucheOrder(object) {
+  const doc = object?.document;
+  if (!doc) return;
+  const sortLayer = coucheSortLayer(doc);
+  if (sortLayer === null) return;
+  const view = doc.documentName === "Drawing" ? object.shape : object.mesh;
+  if (!view || view.destroyed || view.sortLayer === sortLayer) return;
+  view.sortLayer = sortLayer;
+  if (canvas?.primary) canvas.primary.sortDirty = true;
+}
+
 function applyTileCouche(tile) {
+  applyCoucheOrder(tile);
   if (!game.user.isGM || !tile?.document) return;
   const inCouche = layerOf(tile.document) === activeCouche();
   // Hors de la couche active : le clic passe à travers (eventMode de PIXI), comme dans Roll20.
