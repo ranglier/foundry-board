@@ -393,6 +393,7 @@ let playerDrag = null;
    clic : l'image est prise du premier coup. Sur l'outil Tuiles, un clic sur un jeton revient aux Jetons. */
 function onGMPointerDown(event) {
   if (!game.user.isGM || event.button !== 0 || !canvas?.ready || event.target !== boardElement()) return;
+  if (canvasBusy()) return;
   const active = canvas.activeLayer;
   if (![canvas.tokens, canvas.tiles, canvas.drawings].includes(active)) return;
   // Outil de tracé (main levée, rectangle…) : le clic dessine, il ne prend rien.
@@ -412,6 +413,7 @@ function onGMPointerDown(event) {
 
 function onPlayerPointerDown(event) {
   if (game.user.isGM || event.button !== 0 || !canvas?.ready || event.target !== boardElement()) return;
+  if (canvasBusy()) return;
   const p = canvas.canvasCoordinatesFromClient({ x: event.clientX, y: event.clientY });
   // Un jeton que le joueur peut prendre (son personnage) reste prioritaire.
   const token = canvas.tokens?.placeables?.find((t) => t.visible && t.document.isOwner && t.bounds?.contains(p.x, p.y));
@@ -687,6 +689,29 @@ function onRenderHUD(hud, html) {
 
 const COUCHE_COLORS = { fond: "#9aa3ad", joueurs: "#3fae5b", mj: "#d9534f" };
 
+/** Interface du module (barre, liseré, pastille) affichée ? Les raccourcis et le panneau restent actifs. */
+const interfaceShown = () => game.settings.get(MODULE, "interface") !== false;
+
+/** Affiche ou masque l'interface (bouton des contrôles de scène, Maj+T, œil de la barre). */
+async function setInterfaceShown(shown) {
+  await game.settings.set(MODULE, "interface", !!shown);
+}
+
+function onInterfaceChange() {
+  renderCoucheBar();
+  const badge = document.getElementById("tableau-hover-badge");
+  if (badge && !interfaceShown()) badge.hidden = true;
+  // Bouton à bascule des contrôles de scène : son état suit le réglage (raccourci, œil de la barre).
+  const tool = ui.controls?.controls?.tokens?.tools?.["tableau-interface"] ?? ui.controls?.controls?.tiles?.tools?.["tableau-interface"];
+  if (tool && tool.active !== interfaceShown()) ui.controls.render();
+}
+
+/**
+ * Un autre module ou le système attend un clic sur la carte (choix d'une cible, d'une case, peinture des
+ * terrains : curseur en croix sur la carte). Le tableau ne touche alors ni à l'outil actif ni au clic.
+ */
+const canvasBusy = () => boardElement()?.style?.cursor === "crosshair";
+
 function activeCouche() {
   const value = game.settings.get(MODULE, "couche");
   return LAYERS[value] ? value : "mj";
@@ -731,7 +756,19 @@ function onControlTile(tile, controlled) {
   if (controlled && game.user.isGM && layerOf(tile.document) !== activeCouche()) tile.release();
 }
 
-/** Barre fixe en haut de la scène : couche active, changement de couche, panneau. */
+/**
+ * Place de la barre : dans la colonne du haut de l'interface de Foundry (#ui-top), après le carrousel de
+ * combat (Combat Tracker Dock s'y insère en tête) : la barre passe sous le carrousel au lieu de le couvrir, et
+ * reste centrée sur la scène entre la barre latérale et les contrôles. Sans #ui-top : barre flottante.
+ */
+function placeCoucheBar(bar) {
+  const top = document.getElementById("ui-top");
+  bar.classList.toggle("tableau-bar--floating", !top);
+  const parent = top ?? document.body;
+  if (bar.parentElement !== parent || bar !== parent.lastElementChild) parent.append(bar);
+}
+
+/** Barre en haut de la scène : couche active, changement de couche, panneau, masquage de l'interface. */
 function renderCoucheBar() {
   if (!game.user.isGM) return;
   let bar = document.getElementById("tableau-couche-bar");
@@ -739,14 +776,15 @@ function renderCoucheBar() {
     bar = document.createElement("div");
     bar.id = "tableau-couche-bar";
     bar.addEventListener("click", (event) => {
-      const button = event.target.closest("[data-couche], [data-open]");
+      const button = event.target.closest("[data-couche], [data-open], [data-hide]");
       if (!button) return;
       event.preventDefault();
       if (button.dataset.open) return TableauPanel.open();
+      if (button.dataset.hide) return setInterfaceShown(false);
       setCouche(button.dataset.couche);
     });
-    document.body.append(bar);
   }
+  placeCoucheBar(bar);
   let frame = document.getElementById("tableau-couche-frame");
   if (!frame) {
     frame = document.createElement("div");
@@ -754,7 +792,7 @@ function renderCoucheBar() {
     document.body.append(frame);
   }
   const current = activeCouche();
-  const show = !!canvas?.ready && !!canvas.scene;
+  const show = !!canvas?.ready && !!canvas.scene && interfaceShown();
   bar.hidden = !show;
   frame.hidden = !show || !game.settings.get(MODULE, "frame");
   frame.style.setProperty("--tableau-couche", COUCHE_COLORS[current]);
@@ -766,6 +804,9 @@ function renderCoucheBar() {
     </button>`).join("") + `
     <button type="button" data-open="1" class="tableau-bar__panel" data-tooltip="Panneau Tableau de jeu (Maj+B)" aria-label="Panneau Tableau de jeu">
       <i class="fa-solid fa-chalkboard"></i>
+    </button>
+    <button type="button" data-hide="1" class="tableau-bar__hide" data-tooltip="Masquer l'interface du tableau (Maj+T, ou bouton des contrôles de scène)" aria-label="Masquer l'interface du tableau">
+      <i class="fa-solid fa-eye-slash"></i>
     </button>`;
 }
 
@@ -785,6 +826,7 @@ function updateHoverBadge() {
   let badge = document.getElementById("tableau-hover-badge");
   const hide = () => { if (badge) badge.hidden = true; };
   if (!lastPointer || !canvas?.ready || lastPointer.target !== boardElement() || !game.settings.get(MODULE, "badge")) return hide();
+  if (!interfaceShown() || canvasBusy()) return hide();
   if (![canvas.tiles, canvas.tokens, canvas.drawings].includes(canvas.activeLayer)) return hide();
   const p = canvas.canvasCoordinatesFromClient({ x: lastPointer.x, y: lastPointer.y });
   if (canvas.tokens?.placeables?.some((t) => t.visible && t.bounds?.contains(p.x, p.y))) return hide();
@@ -833,6 +875,7 @@ const HELP = `
     <tr><td>Maj+G</td><td>Grouper</td></tr>
     <tr><td>Maj+V</td><td>Montrer en grand</td></tr>
     <tr><td>Maj+B</td><td>Ce panneau</td></tr>
+    <tr><td>Maj+T</td><td>Afficher / masquer la barre, le liseré et la pastille</td></tr>
   </table>`;
 
 class TableauPanel extends ApplicationV2 {
@@ -849,8 +892,13 @@ class TableauPanel extends ApplicationV2 {
     return app.render({ force: true });
   }
 
-  constructor(options) {
-    super(options);
+  constructor(options = {}) {
+    // Position par défaut à droite, contre la barre latérale : la fenêtre « Terrains » du système ASOIAF Free
+    // Company s'ouvre en haut à gauche (top 80, left 120), les deux ne s'empilent plus.
+    const sidebar = document.getElementById("sidebar")?.getBoundingClientRect();
+    const right = sidebar?.width ? sidebar.left : window.innerWidth;
+    const left = Math.max(120, Math.round(right - 360 - 16));
+    super(foundry.utils.mergeObject({ position: { left, top: 80 } }, options, { inplace: false }));
     // « state » est réservé par ApplicationV2 : nom propre au module.
     this.tbView = { tab: "couche", help: false, newScene: "Tableau", filter: "" };
   }
@@ -1386,13 +1434,19 @@ function refreshPanel() {
 /* Initialisation                                                                                  */
 /* ---------------------------------------------------------------------------------------------- */
 
-function keybinding(name, title, key, onDown) {
+/**
+ * Raccourci Maj+touche (MJ). Avec `needsSelection`, la touche n'est prise que si des images ou dessins sont
+ * sélectionnés : sinon elle passe aux autres modules (Maj+M est aussi « combattant suivant » de Combat
+ * Tracker Dock).
+ */
+function keybinding(name, title, key, onDown, { needsSelection = false } = {}) {
   game.keybindings.register(MODULE, name, {
     name: title,
     editable: [{ key, modifiers: ["Shift"] }],
     restricted: true,
     onDown: () => {
       if (!canvas?.ready) return false;
+      if (needsSelection && !selection().length) return false;
       Promise.resolve(onDown()).catch((err) => notify(err.message ?? String(err), "error"));
       return true;
     }
@@ -1406,19 +1460,23 @@ Hooks.once("init", () => {
     scope: "client", config: true, type: Boolean, default: true, onChange: () => renderCoucheBar() });
   game.settings.register(MODULE, "badge", { name: "Pastille au survol des images", hint: "Couche, visibilité et verrou de l'image sous le pointeur.",
     scope: "client", config: true, type: Boolean, default: true });
+  game.settings.register(MODULE, "interface", { name: "Afficher l'interface du tableau", hint: "Barre de la couche active, liseré et pastille. Aussi Maj+T ou le bouton à bascule des contrôles de scène (Jetons, Tuiles).",
+    scope: "client", config: true, type: Boolean, default: true, onChange: () => onInterfaceChange() });
   game.settings.register(MODULE, "closedFolders", { scope: "client", config: false, type: Object, default: {} });
   game.settings.register(MODULE, "migrated12", { scope: "world", config: false, type: Boolean, default: false });
   keybinding("couche-fond", "Couche active : Fond", "Digit1", () => setCouche("fond"));
   keybinding("couche-joueurs", "Couche active : Joueurs", "Digit2", () => setCouche("joueurs"));
   keybinding("couche-mj", "Couche active : MJ", "Digit3", () => setCouche("mj"));
   keybinding("panel", "Ouvrir le panneau Tableau de jeu", "KeyB", () => TableauPanel.open());
-  keybinding("to-fond", "Sélection vers le calque Fond", "KeyF", () => moveToLayer(selection(), "fond"));
-  keybinding("to-joueurs", "Sélection vers le calque Joueurs", "KeyJ", () => moveToLayer(selection(), "joueurs"));
-  keybinding("to-mj", "Sélection vers le calque MJ", "KeyM", () => moveToLayer(selection(), "mj"));
-  keybinding("lock", "Verrouiller / déverrouiller la sélection", "KeyL", () => toggleLock(selection()));
-  keybinding("hide", "Montrer / cacher la sélection", "KeyH", () => toggleHidden(selection()));
-  keybinding("group", "Grouper la sélection", "KeyG", () => groupSelection(selection()));
-  keybinding("show", "Montrer en grand l'image sélectionnée", "KeyV", () => showLarge(selection()[0]));
+  keybinding("interface", "Afficher / masquer l'interface du tableau", "KeyT", () => setInterfaceShown(!interfaceShown()));
+  const sel = { needsSelection: true };
+  keybinding("to-fond", "Sélection vers le calque Fond", "KeyF", () => moveToLayer(selection(), "fond"), sel);
+  keybinding("to-joueurs", "Sélection vers le calque Joueurs", "KeyJ", () => moveToLayer(selection(), "joueurs"), sel);
+  keybinding("to-mj", "Sélection vers le calque MJ", "KeyM", () => moveToLayer(selection(), "mj"), sel);
+  keybinding("lock", "Verrouiller / déverrouiller la sélection", "KeyL", () => toggleLock(selection()), sel);
+  keybinding("hide", "Montrer / cacher la sélection", "KeyH", () => toggleHidden(selection()), sel);
+  keybinding("group", "Grouper la sélection", "KeyG", () => groupSelection(selection()), sel);
+  keybinding("show", "Montrer en grand l'image sélectionnée", "KeyV", () => showLarge(selection()[0]), sel);
 });
 
 Hooks.on("getSceneControlButtons", (controls) => {
@@ -1432,13 +1490,29 @@ Hooks.on("getSceneControlButtons", (controls) => {
     visible: true,
     onChange: () => TableauPanel.open()
   };
+  // Interrupteur : montre ou masque la barre, le liseré et la pastille (le panneau et les raccourcis restent).
+  const toggle = {
+    name: "tableau-interface",
+    title: "Interface du tableau : afficher / masquer (Maj+T)",
+    icon: "fa-solid fa-layer-group",
+    order: 101,
+    toggle: true,
+    visible: true,
+    active: interfaceShown(),
+    onChange: (event, active) => { if (active !== interfaceShown()) setInterfaceShown(active); }
+  };
   // Foundry 13 et 14 : contrôles indexés par nom (jetons et tuiles) ; ancien format en tableau.
   const groups = Array.isArray(controls)
     ? controls.filter((c) => c.name === "token" || c.name === "tiles")
     : [controls.tokens ?? controls.token, controls.tiles].filter(Boolean);
   for (const group of groups) {
-    if (Array.isArray(group.tools)) group.tools.push({ ...tool, onClick: tool.onChange });
-    else group.tools[tool.name] = tool;
+    if (Array.isArray(group.tools)) {
+      group.tools.push({ ...tool, onClick: tool.onChange });
+      group.tools.push({ ...toggle, onClick: (active) => setInterfaceShown(active) });
+    } else {
+      group.tools[tool.name] = tool;
+      group.tools[toggle.name] = toggle;
+    }
   }
 });
 

@@ -92,11 +92,14 @@
 
 /* --- Couche active : barre sur la scène, liseré, pastille au survol (MJ) -------------------------- */
 
+/* Dans #ui-top (colonne du haut de l'interface de Foundry), après le carrousel de Combat Tracker Dock :
+   la barre se range sous le carrousel au lieu de le couvrir. */
 #tableau-couche-bar {
-  position: fixed;
-  top: 10px;
-  left: 50%;
-  transform: translateX(-50%);
+  position: relative;
+  align-self: center;
+  flex: 0 0 auto;
+  margin-top: 10px;
+  pointer-events: auto;
   z-index: 60;
   display: flex;
   gap: 4px;
@@ -111,6 +114,21 @@
 #tableau-couche-frame[hidden],
 #tableau-hover-badge[hidden] {
   display: none;
+}
+
+/* Combat Tracker Dock (« masquer les interfaces en conflit ») cache tout ce qui est dans #ui-top pendant un
+   combat : la barre, rangée sous le carrousel, n'est pas en conflit et reste affichée. */
+#ui-top > #tableau-couche-bar:not([hidden]) {
+  display: flex !important;
+}
+
+/* Sans #ui-top (version de Foundry sans cette colonne) : barre flottante en haut de la scène. */
+#tableau-couche-bar.tableau-bar--floating {
+  position: fixed;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-top: 0;
 }
 
 #tableau-couche-bar button {
@@ -145,6 +163,15 @@
   padding: 0 9px;
   border-left: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 0 6px 6px 0;
+}
+
+#tableau-couche-bar .tableau-bar__hide {
+  padding: 0 9px;
+  opacity: 0.7;
+}
+
+#tableau-couche-bar .tableau-bar__hide:hover {
+  opacity: 1;
 }
 
 #tableau-couche-frame {

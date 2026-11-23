@@ -8,7 +8,7 @@ Installation : Modules complémentaires > Installer un module > manifeste :
 
 ## Ce que fait le module (pour le MJ)
 
-- **Couche active, comme dans Roll20** : barre en haut de la scène (Fond / Joueurs / MJ, Maj+1 / 2 / 3) et liseré de couleur autour de la scène (gris, vert, rouge). Seuls les images et dessins de la couche active se prennent ; les autres laissent passer le clic. Au survol, une pastille indique la couche d'une image ou d'un dessin, s'il est caché, verrouillé ou groupé.
+- **Couche active, comme dans Roll20** : barre en haut de la scène (Fond / Joueurs / MJ, Maj+1 / 2 / 3), rangée sous le carrousel de Combat Tracker Dock pendant un combat, et liseré de couleur autour de la scène (gris, vert, rouge). Seuls les images et dessins de la couche active se prennent ; les autres laissent passer le clic. Au survol, une pastille indique la couche d'une image ou d'un dessin, s'il est caché, verrouillé ou groupé.
 - **Glisser-déposer d'images sur la scène**, sur la couche active (cachée aux joueurs si c'est la couche MJ), depuis :
   - un fichier de l'ordinateur (plusieurs à la fois ; envoyés dans `worlds/<monde>/tableau/`) ;
   - toute image d'une fenêtre ouverte : portrait d'une fiche de personnage ou de PNJ, image d'une page de journal, image dans le texte d'un journal (glisser l'image elle-même, pas la fenêtre) ;
@@ -30,6 +30,7 @@ Installation : Modules complémentaires > Installer un module > manifeste :
     - **glisser-déposer** une scène ou un dossier sur un dossier pour l'y ranger, sur une scène pour le mettre à côté (à sa place si le dossier est en tri manuel), sur la zone du bas pour le sortir de tout dossier ;
     - filtre par nom, nouvelle scène tableau (sans grille ni brouillard), à la racine ou dans un dossier (« + » du dossier).
   - Bouton **?** : gestes et raccourcis.
+- **Interface à la demande** : la barre, le liseré et la pastille se masquent et se réaffichent par le bouton à bascule des contrôles de scène (Jetons et Tuiles, icône de calques), Maj+T, ou l'œil au bout de la barre. Les raccourcis et le panneau restent disponibles. Le choix est propre à chaque navigateur.
 
 ## Raccourcis (modifiables dans Configurer les contrôles)
 
@@ -42,8 +43,16 @@ Installation : Modules complémentaires > Installer un module > manifeste :
 | Maj+G | Grouper la sélection |
 | Maj+V | Montrer en grand l'image sélectionnée |
 | Maj+B | Panneau Tableau de jeu |
+| Maj+T | Afficher / masquer l'interface (barre, liseré, pastille) |
 
-Réglages (Paramètres du jeu > Tableau de jeu) : liseré de la couche active, pastille au survol.
+Les raccourcis qui agissent sur la sélection (Maj+F / J / M / H / L / G / V) ne prennent la touche que si des images ou dessins sont sélectionnés : sans sélection, elle passe aux autres modules (Maj+M reste « combattant suivant » de Combat Tracker Dock).
+
+Réglages (Paramètres du jeu > Tableau de jeu) : interface affichée, liseré de la couche active, pastille au survol.
+
+## Cohabitation avec d'autres modules
+
+- **Combat Tracker Dock** : la barre se range dans la colonne du haut de Foundry, sous le carrousel, et reste visible même avec « masquer les interfaces en conflit ».
+- **ASOIAF Free Company** (système) : le panneau s'ouvre à droite, contre la barre latérale, pour ne pas recouvrir la fenêtre Terrains ; quand le système attend un clic sur la carte (cible, déplacement, peinture des terrains : curseur en croix), le tableau ne change pas d'outil et laisse passer le clic, y compris chez les joueurs.
 
 ## Fonctionnement
 
