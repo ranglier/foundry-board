@@ -90,10 +90,8 @@
   color: var(--color-warm-1, #ff6400);
 }
 
-/* --- Couche active : barre sur la scène, liseré, pastille au survol (MJ) -------------------------- */
+/* --- Couche active : barre sous la liste des scènes, pastille au survol (MJ) ----------------------- */
 
-/* Dans #ui-top (colonne du haut de l'interface de Foundry), après le carrousel de Combat Tracker Dock :
-   la barre se range sous le carrousel au lieu de le couvrir. */
 #tableau-couche-bar {
   position: relative;
   align-self: center;
@@ -111,9 +109,30 @@
 }
 
 #tableau-couche-bar[hidden],
-#tableau-couche-frame[hidden],
 #tableau-hover-badge[hidden] {
   display: none;
+}
+
+/* Sous la liste des scènes (colonne de gauche de Foundry). La liste prend d'ordinaire toute la hauteur de la
+   colonne et, repliée, ne fait que masquer les scènes inactives (visibility) : tant que la barre est là, la
+   liste se limite aux scènes affichées et la barre suit leur nombre. Dépliée et trop longue, la liste défile. */
+#tableau-couche-bar.tableau-bar--scenes {
+  align-self: flex-start;
+  margin-top: 6px;
+}
+
+:has(> #tableau-couche-bar.tableau-bar--scenes:not([hidden])) > #scene-navigation {
+  flex: 0 1 auto;
+  min-height: 0;
+}
+
+:has(> #tableau-couche-bar.tableau-bar--scenes:not([hidden])) > #scene-navigation:not(.expanded) > #scene-navigation-inactive {
+  display: none;
+}
+
+:has(> #tableau-couche-bar.tableau-bar--scenes:not([hidden])) > #scene-navigation.expanded > #scene-navigation-inactive {
+  min-height: 0;
+  overflow-y: auto;
 }
 
 /* Combat Tracker Dock (« masquer les interfaces en conflit ») cache tout ce qui est dans #ui-top pendant un
@@ -159,6 +178,13 @@
   font-weight: bold;
 }
 
+/* Boutons de couche : icône seule (nom et raccourci en infobulle), la couche active est en couleur. */
+#tableau-couche-bar .tableau-bar__couche {
+  justify-content: center;
+  width: 34px;
+  padding: 0;
+}
+
 #tableau-couche-bar .tableau-bar__panel {
   padding: 0 9px;
   border-left: 1px solid rgba(255, 255, 255, 0.15);
@@ -172,14 +198,6 @@
 
 #tableau-couche-bar .tableau-bar__hide:hover {
   opacity: 1;
-}
-
-#tableau-couche-frame {
-  position: fixed;
-  inset: 0;
-  z-index: 1;
-  pointer-events: none;
-  box-shadow: inset 0 0 0 3px var(--tableau-couche, #d9534f);
 }
 
 #tableau-hover-badge {

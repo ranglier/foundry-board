@@ -689,7 +689,7 @@ function onRenderHUD(hud, html) {
 
 const COUCHE_COLORS = { fond: "#9aa3ad", joueurs: "#3fae5b", mj: "#d9534f" };
 
-/** Interface du module (barre, liseré, pastille) affichée ? Les raccourcis et le panneau restent actifs. */
+/** Interface du module (barre de couche, pastille) affichée ? Les raccourcis et le panneau restent actifs. */
 const interfaceShown = () => game.settings.get(MODULE, "interface") !== false;
 
 /** Affiche ou masque l'interface (bouton des contrôles de scène, Maj+T, œil de la barre). */
@@ -725,7 +725,7 @@ async function setCouche(layer, { activateTiles = true } = {}) {
   if (activateTiles && canvas?.ready && canvas.activeLayer !== canvas.tiles) canvas.tiles?.activate?.();
 }
 
-/** Interactivité des tuiles selon la couche active (MJ seulement), barre, liseré, panneau. */
+/** Interactivité des tuiles selon la couche active (MJ seulement), barre, panneau. */
 function applyCouche() {
   if (!game.user.isGM) return;
   for (const object of [...(canvas?.tiles?.placeables ?? []), ...(canvas?.drawings?.placeables ?? [])]) applyTileCouche(object);
@@ -757,14 +757,15 @@ function onControlTile(tile, controlled) {
 }
 
 /**
- * Place de la barre : dans la colonne du haut de l'interface de Foundry (#ui-top), après le carrousel de
- * combat (Combat Tracker Dock s'y insère en tête) : la barre passe sous le carrousel au lieu de le couvrir, et
- * reste centrée sur la scène entre la barre latérale et les contrôles. Sans #ui-top : barre flottante.
+ * Place de la barre : dans la colonne de gauche de Foundry, juste sous la liste des scènes (#scene-navigation).
+ * La feuille de style ramène la liste à la hauteur des scènes affichées (repliée ou dépliée) : la barre suit
+ * le nombre de scènes, loin du carrousel de combat en haut. Repli : colonne du haut (#ui-top), sinon flottante.
  */
 function placeCoucheBar(bar) {
-  const top = document.getElementById("ui-top");
-  bar.classList.toggle("tableau-bar--floating", !top);
-  const parent = top ?? document.body;
+  const column = document.getElementById("scene-navigation")?.parentElement;
+  const parent = column ?? document.getElementById("ui-top") ?? document.body;
+  bar.classList.toggle("tableau-bar--scenes", !!column);
+  bar.classList.toggle("tableau-bar--floating", parent === document.body);
   if (bar.parentElement !== parent || bar !== parent.lastElementChild) parent.append(bar);
 }
 
@@ -785,22 +786,16 @@ function renderCoucheBar() {
     });
   }
   placeCoucheBar(bar);
-  let frame = document.getElementById("tableau-couche-frame");
-  if (!frame) {
-    frame = document.createElement("div");
-    frame.id = "tableau-couche-frame";
-    document.body.append(frame);
-  }
+  // Liseré autour de l'écran (versions 1.2 à 1.4) : retiré.
+  document.getElementById("tableau-couche-frame")?.remove();
   const current = activeCouche();
   const show = !!canvas?.ready && !!canvas.scene && interfaceShown();
   bar.hidden = !show;
-  frame.hidden = !show || !game.settings.get(MODULE, "frame");
-  frame.style.setProperty("--tableau-couche", COUCHE_COLORS[current]);
   bar.style.setProperty("--tableau-couche", COUCHE_COLORS[current]);
   bar.innerHTML = LAYER_ORDER.map((k, i) => `
-    <button type="button" data-couche="${k}" class="${k === current ? "active" : ""}" style="--c: ${COUCHE_COLORS[k]}"
-      data-tooltip="Couche ${LAYERS[k].label} : ${LAYERS[k].hint} (Maj+${i + 1})" aria-pressed="${k === current}">
-      <i class="${LAYERS[k].icon}"></i> ${LAYERS[k].label}
+    <button type="button" data-couche="${k}" class="tableau-bar__couche ${k === current ? "active" : ""}" style="--c: ${COUCHE_COLORS[k]}"
+      data-tooltip="Couche ${LAYERS[k].label} : ${LAYERS[k].hint} (Maj+${i + 1})" aria-label="Couche ${LAYERS[k].label}" aria-pressed="${k === current}">
+      <i class="${LAYERS[k].icon}"></i>
     </button>`).join("") + `
     <button type="button" data-open="1" class="tableau-bar__panel" data-tooltip="Panneau Tableau de jeu (Maj+B)" aria-label="Panneau Tableau de jeu">
       <i class="fa-solid fa-chalkboard"></i>
@@ -860,7 +855,7 @@ const { ApplicationV2 } = foundry.applications.api;
 
 const HELP = `
   <ul>
-    <li><strong>Couche active</strong> (barre en haut de la scène, Maj+1 / 2 / 3) : seuls ses images et dessins se prennent. Une image déposée ou un dessin tracé y arrive (caché sur la couche MJ).</li>
+    <li><strong>Couche active</strong> (barre sous la liste des scènes, Maj+1 / 2 / 3) : seuls ses images et dessins se prennent. Une image déposée ou un dessin tracé y arrive (caché sur la couche MJ).</li>
     <li><strong>Dessins</strong> : outil Dessins pour tracer ; ensuite, un clic sur un dessin de la couche active le prend, quel que soit l'outil.</li>
     <li><strong>Déposer</strong> : un fichier de Windows, une image d'une fiche ou d'un journal ouvert, une page image, un objet ; Maj + glisser un acteur pour son portrait.</li>
     <li><strong>Image</strong> : clic pour la prendre, poignées pour la taille, Maj + molette pour la tourner, clic droit pour ses boutons (couche, verrou, en grand, groupe).</li>
@@ -875,7 +870,7 @@ const HELP = `
     <tr><td>Maj+G</td><td>Grouper</td></tr>
     <tr><td>Maj+V</td><td>Montrer en grand</td></tr>
     <tr><td>Maj+B</td><td>Ce panneau</td></tr>
-    <tr><td>Maj+T</td><td>Afficher / masquer la barre, le liseré et la pastille</td></tr>
+    <tr><td>Maj+T</td><td>Afficher / masquer la barre de couche et la pastille</td></tr>
   </table>`;
 
 class TableauPanel extends ApplicationV2 {
@@ -1456,11 +1451,9 @@ function keybinding(name, title, key, onDown, { needsSelection = false } = {}) {
 Hooks.once("init", () => {
   game.settings.register(MODULE, "couche", { scope: "client", config: false, type: String, default: "mj",
     onChange: () => applyCouche() });
-  game.settings.register(MODULE, "frame", { name: "Liseré de la couche active", hint: "Fin cadre coloré autour de la scène (gris Fond, vert Joueurs, rouge MJ).",
-    scope: "client", config: true, type: Boolean, default: true, onChange: () => renderCoucheBar() });
   game.settings.register(MODULE, "badge", { name: "Pastille au survol des images", hint: "Couche, visibilité et verrou de l'image sous le pointeur.",
     scope: "client", config: true, type: Boolean, default: true });
-  game.settings.register(MODULE, "interface", { name: "Afficher l'interface du tableau", hint: "Barre de la couche active, liseré et pastille. Aussi Maj+T ou le bouton à bascule des contrôles de scène (Jetons, Tuiles).",
+  game.settings.register(MODULE, "interface", { name: "Afficher l'interface du tableau", hint: "Barre de la couche active (sous la liste des scènes) et pastille au survol. Aussi Maj+T ou le bouton à bascule des contrôles de scène (Jetons, Tuiles).",
     scope: "client", config: true, type: Boolean, default: true, onChange: () => onInterfaceChange() });
   game.settings.register(MODULE, "closedFolders", { scope: "client", config: false, type: Object, default: {} });
   game.settings.register(MODULE, "migrated12", { scope: "world", config: false, type: Boolean, default: false });
@@ -1490,7 +1483,7 @@ Hooks.on("getSceneControlButtons", (controls) => {
     visible: true,
     onChange: () => TableauPanel.open()
   };
-  // Interrupteur : montre ou masque la barre, le liseré et la pastille (le panneau et les raccourcis restent).
+  // Interrupteur : montre ou masque la barre de couche et la pastille (le panneau et les raccourcis restent).
   const toggle = {
     name: "tableau-interface",
     title: "Interface du tableau : afficher / masquer (Maj+T)",
